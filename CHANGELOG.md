@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-03
+
+### Fixed
+- Codemode collapsed rows now prefer the keybinding formatter injected through the tool render context (`context.keyHint`) over the package import, so the "to expand" hint keeps the user's configured key text.
+- Pi 1.5's extension docs recommend the injected formatters: importing `keyHint()` from `@earendil-works/pi-coding-agent` can resolve the extension's own package copy, which does not see pi's configured keybindings, and `app.*` ids then format without the key.
+- The package import remains the fallback for render contexts that omit the formatter, such as tests and older Pi versions.
+
+### Changed
+- Dev dependency on `@earendil-works/pi-coding-agent` raised from `^1.4.0` to `^1.5.0`; peer dependencies stay `*`. Verified against Pi 1.5.0: typecheck clean and 780 tests pass.
+
 ## [0.6.0] - 2026-11-03
 
 Fork release: `pi-tool-display-next` modernizes the extension for Pi 1.x. Based on upstream `MasuRii/pi-tool-display` 0.5.0.
