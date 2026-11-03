@@ -14,7 +14,7 @@ Requires Pi >= 1.0. Install as a Pi package: `pi install npm:pi-tool-display-nex
 
 OpenCode-style tool rendering for the [Pi coding agent](https://github.com/mariozechner/pi).
 
-`pi-tool-display` keeps tool calls compact by default, adds richer diff rendering for file edits, and improves a few core chat UI details such as thinking labels and the native user prompt box.
+`pi-tool-display-next` keeps tool calls compact by default, adds richer diff rendering for file edits, and improves a few core chat UI details such as thinking labels and the native user prompt box. Rendering goes through Pi's official `pi.registerToolRenderer` resolver API, so MCP tools, codemode calls, and late-registered extension tools all render without touching the tool objects themselves. Requires Pi >= 1.0.
 
 <img width="1360" height="752" alt="image" src="https://github.com/user-attachments/assets/777944a2-18b2-4642-b035-2c703a5abb1b" />
 
@@ -24,6 +24,12 @@ OpenCode-style tool rendering for the [Pi coding agent](https://github.com/mario
 <img width="1919" height="550" alt="image" src="https://github.com/user-attachments/assets/1d3f0b38-a5b5-47fc-b54b-8b55cc2bfaf1" />
 
 </div>
+
+## This fork vs the old tool
+
+This fork replaces the upstream rendering engine. Upstream `pi-tool-display` (v0.5.0 and earlier) wraps tool objects through `pi.registerTool` interception and discovers tool ownership with `getAllTools()` sweeps during `before_agent_start`. That machinery is inert or harmful on Pi 1.x and is fully removed here. This fork renders through the official `pi.registerToolRenderer` resolver API, stores config at `<agent-dir>/pi-tool-display-next.json`, and requires Pi >= 1.0.
+
+The sections below document THIS fork. Beware when reading the upstream project's README, its older releases, or any inherited text that mentions tool wrapping, decoration, ownership discovery, or the bare `pi-tool-display` package name: that content describes the OLD tool only and does not apply to this fork. In particular, `pi install npm:pi-tool-display` installs the outdated upstream package, not this one.
 
 ## Features
 
@@ -37,34 +43,30 @@ OpenCode-style tool rendering for the [Pi coding agent](https://github.com/mario
 - **Three presets**: `opencode`, `balanced`, and `verbose`
 - **Thinking labels** during streaming and final message rendering, with context sanitization to avoid leaking presentation labels back into future model turns
 - **Optional native user message box** with markdown-aware rendering and safer ANSI/background handling
-- **Per-tool ownership toggles** so this extension can coexist with other renderer extensions
+- **Per-tool claim toggles** so this extension can coexist with other renderer extensions; unclaimed tools fall through to `next()` untouched
 - **Capability-aware settings** that keep MCP and RTK-specific controls aligned with the current environment
-- **Adapter API for renderer consumers** through the `pi-tool-display/tool-display-api-consumer` subpath export
+- **Adapter API for renderer consumers** through the `pi-tool-display-next/tool-display-api-consumer` subpath export
 
 ## Installation
-
-### Local extension folder
-
-Place this folder in one of Pi's auto-discovery locations:
-
-```text
-# Global default (when PI_CODING_AGENT_DIR is unset)
-~/.pi/agent/extensions/pi-tool-display
-
-# Project-specific
-.pi/extensions/pi-tool-display
-```
 
 ### npm package
 
 ```bash
-pi install npm:pi-tool-display
+pi install npm:pi-tool-display-next
 ```
+
+Do NOT install `npm:pi-tool-display` - that is the unmaintained upstream package targeting Pi 0.8x.
 
 ### Git repository
 
 ```bash
-pi install git:github.com/MasuRii/pi-tool-display
+pi install git:github.com/noctrex/pi-tool-display-next
+```
+
+### Local checkout (development)
+
+```bash
+pi --extension /path/to/pi-tool-display-next/index.ts
 ```
 
 ## Usage
@@ -102,13 +104,13 @@ Advanced options remain in `pi-tool-display-next.json`.
 
 ### Tool display adapter API
 
-Other extensions can opt into `pi-tool-display` rendering without directly depending on its load order by importing the consumer helper:
+Other extensions can opt into rendering without depending on this extension's load order by importing the consumer helper:
 
 ```ts
-import { decorateToolForDisplay, decorateMcpToolForDisplay } from "pi-tool-display/tool-display-api-consumer";
+import { decorateToolForDisplay, decorateMcpToolForDisplay } from "pi-tool-display-next/tool-display-api-consumer";
 ```
 
-`decorateToolForDisplay(tool, adapter)` applies the runtime decoration immediately when `pi-tool-display` is loaded, or queues the decoration until the API becomes available. Use adapter options such as `kind: "read" | "edit" | "mcp" | "generic"` to select the renderer family; `decorateMcpToolForDisplay(tool)` is the shortcut for MCP-style tools.
+`decorateToolForDisplay(tool, adapter)` registers a render adapter keyed by the tool's name and returns the tool unchanged; Pi draws the tool through this extension's `registerToolRenderer` resolver regardless of which extension loaded first. If the API is not available yet, the call queues until the API appears. Use adapter options such as `kind: "read" | "edit" | "mcp" | "generic"` to select the renderer family; `decorateMcpToolForDisplay(tool)` is the shortcut for MCP-style tools. The tool object itself is never modified, so `outputSchema` and structured results pass through untouched.
 
 ## Presets
 
@@ -127,7 +129,7 @@ import { decorateToolForDisplay, decorateMcpToolForDisplay } from "pi-tool-displ
 | Mode | Behavior |
 |------|----------|
 | `opencode` | Classic collapsed output using `bashCollapsedLines` limit with expansion hint |
-| `summary` | Shows only line count (e.g., "↳ 3 lines returned") — no output displayed |
+| `summary` | Shows only line count (e.g., "3 lines returned") - no output displayed |
 | `preview` | Shows actual output lines using `previewLines` limit |
 
 ## Configuration
@@ -146,27 +148,34 @@ A starter template is included at `config/config.example.json`. On first load af
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `debug` | boolean | `false` | Opt-in file logging for extension diagnostics; missing values are treated as `false` |
-| `registerToolOverrides` | object | all `true` | Built-in tool ownership flags |
+| `enabled` | boolean | `true` | Master switch for the extension's rendering |
+| `registerToolOverrides` | object | all `true` | Built-in tool rendering claim flags |
 | `customToolOverrides` | object | `{}` | Explicit opt-in rendering rules for non-built-in extension tools |
 | `enableNativeUserMessageBox` | boolean | `true` | Enable bordered user prompt rendering |
+| `thinkingLabel` | boolean | `false` | Label thinking blocks and set Pi's collapsed thinking label (accent colored); off by default |
 | `readOutputMode` | string | `"hidden"` | `hidden`, `summary`, or `preview` |
 | `searchOutputMode` | string | `"hidden"` | `hidden`, `count`, or `preview` |
 | `mcpOutputMode` | string | `"hidden"` | `hidden`, `summary`, or `preview` |
+| `codemodeOutputMode` | string | `"calls"` | Codemode script rows: `calls` (collapsed status + call count), `summary`, or `preview` |
 | `previewLines` | number | `8` | Lines shown in collapsed preview mode |
 | `expandedPreviewMaxLines` | number | `4000` | Max preview lines when fully expanded |
 | `bashOutputMode` | string | `"opencode"` | `opencode` (collapse), `summary` (line count), or `preview` (show lines) |
 | `bashCollapsedLines` | number | `10` | Lines shown for collapsed bash output (opencode mode) |
+| `bashCommandMaxChars` | number | `0` | Truncate long bash commands to this many characters before display (`0` disables) |
+| `bashIntentMode` | string | `"off"` | `off`, `render` (show `# intent:` comment as a header line), or `render-and-instruct` |
+| `bashIntentShowCommand` | boolean | `false` | Also show the raw command under the intent header |
 | `diffViewMode` | string | `"auto"` | `auto`, `split`, or `unified` |
 | `diffIndicatorMode` | string | `"bars"` | `bars` (vertical indicators), `classic` (+/- markers), or `none` |
 | `diffSplitMinWidth` | number | `120` | Minimum width before auto mode prefers split diffs |
 | `diffCollapsedLines` | number | `24` | Diff lines shown before collapsing |
 | `diffWordWrap` | boolean | `true` | Wrap long diff lines when needed |
+| `allowExternalDiffPreviews` | boolean | `false` | Allow pending edit/write diff previews for paths outside the active workspace |
 | `showTruncationHints` | boolean | `false` | Show truncation indicators for compacted output |
 | `showRtkCompactionHints` | boolean | `false` | Show RTK compaction hints when RTK metadata exists |
 
-### Tool ownership
+### Built-in tool claims
 
-Use `registerToolOverrides` to control which built-in tools this extension owns:
+Use `registerToolOverrides` to control which built-in tools this extension claims for rendering:
 
 ```json
 {
@@ -182,13 +191,13 @@ Use `registerToolOverrides` to control which built-in tools this extension owns:
 }
 ```
 
-Set any entry to `false` if another extension should handle that tool instead.
+Set any entry to `false` to leave that tool's rendering to Pi or another renderer extension; the resolver returns `next()` for unclaimed tools.
 
-> Changes to tool ownership take effect after `/reload`.
+> Changes take effect after `/reload`.
 
 ### Custom tool overrides
 
-Use `customToolOverrides` when another extension registers a noisy top-level tool and you want `pi-tool-display` to render that tool's call/result output. Custom overrides are explicit opt-in only: unlisted or disabled tools keep their original renderers.
+Use `customToolOverrides` when another extension registers a noisy top-level tool and you want `pi-tool-display-next` to render that tool's call/result output. The resolver checks these entries at render time, so tools that register after this extension resolves correctly without extra wiring. Custom overrides are explicit opt-in only: unlisted or disabled tools keep their original renderers.
 
 ```json
 {
@@ -211,7 +220,7 @@ Each entry supports:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | boolean | `true` | Whether `pi-tool-display` should decorate this custom tool |
+| `enabled` | boolean | `true` | Whether `pi-tool-display-next` claims this custom tool for rendering |
 | `kind` | string | `"generic"` | `generic` for plain compact output, or `mcp` for MCP-style call labels and result handling |
 | `outputMode` | string | `"summary"` | `hidden`, `summary`, or `preview` for this custom tool's result output |
 
@@ -231,7 +240,7 @@ Notes:
 - Built-in tool names (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`) are ignored here; use `registerToolOverrides` for those.
 - `generic` call rendering shows the tool name and argument count, then compacts the result according to `outputMode`.
 - `mcp` call rendering understands MCP proxy-style arguments such as `tool`, `server`, `search`, `describe`, and `connect`.
-- Changes for already-registered tools take effect after `/reload`; tools registered later can be decorated as they register.
+- Changes to the config file take effect after `/reload`; tool registration order no longer matters because resolution happens at render time.
 
 ### Example config
 
@@ -260,18 +269,24 @@ Notes:
     }
   },
   "enableNativeUserMessageBox": true,
+  "thinkingLabel": false,
   "readOutputMode": "summary",
   "searchOutputMode": "count",
   "mcpOutputMode": "summary",
+  "codemodeOutputMode": "calls",
   "previewLines": 12,
   "expandedPreviewMaxLines": 4000,
   "bashOutputMode": "opencode",
   "bashCollapsedLines": 15,
+  "bashCommandMaxChars": 0,
+  "bashIntentMode": "off",
+  "bashIntentShowCommand": false,
   "diffViewMode": "auto",
   "diffIndicatorMode": "bars",
   "diffSplitMinWidth": 120,
   "diffCollapsedLines": 24,
   "diffWordWrap": true,
+  "allowExternalDiffPreviews": false,
   "showTruncationHints": false,
   "showRtkCompactionHints": false
 }
@@ -297,7 +312,7 @@ When content is available, `write` call summaries include line count and byte si
 
 ### Thinking labels
 
-Thinking blocks are labeled during streaming and on final messages. Before the next model turn, the extension sanitizes those presentation labels out of the stored assistant context so they do not accumulate or pollute future prompts.
+Off by default. When `thinkingLabel` is enabled, thinking blocks are labeled during streaming and on final messages, and the collapsed thinking row uses Pi's `setHiddenThinkingLabel` API with an accent-colored label. Before the next model turn, the extension sanitizes those presentation labels out of the stored assistant context so they do not accumulate or pollute future prompts.
 
 ### Native user message box
 
@@ -318,15 +333,15 @@ This keeps the UI aligned with the current environment while still allowing dyna
 
 `/reload` is fully supported. On reload, the extension cleans up all tool overrides, prototype patches, timers, and event handlers through its built-in disposal registry, then re-registers everything on the next session lifecycle event. No manual cleanup is needed.
 
-### Tool ownership conflicts
+### Renderer conflicts
 
-If another extension is already rendering one of the built-in tools:
+If another renderer extension claims one of the built-in tools:
 
 1. Set `registerToolOverrides.<tool>` to `false`
 2. Run `/reload`
-3. Use `/tool-display show` to confirm the effective ownership state
+3. Use `/tool-display show` to confirm the effective claim state
 
-Built-in tool overrides (including `bash`) are registered with deferred ownership discovery — the extension discovers which tools it owns via `pi.getAllTools()` during `before_agent_start` before overriding, preventing conflicts with other extensions that also register overrides.
+Resolvers compose in extension load order: for a tool this extension does not claim, the resolver returns `next()` untouched, so the other renderer or Pi's native renderer wins. No ownership discovery runs - the old `getAllTools()` / `before_agent_start` machinery described by the upstream README does not exist in this fork.
 
 ### Config not loading
 
@@ -338,7 +353,7 @@ If your settings are not being applied:
 
 ### MCP or custom tool rendering not appearing
 
-MCP tools are decorated via `pi.registerTool` interception, so they are captured as soon as they register regardless of lifecycle event ordering. If MCP tools still appear unstyled, check that the tool's name or parameter schema matches one of the supported MCP detection heuristics (names containing `mcp`, `server:`, `ctx_`, or parameter schemas with `mcpServer`/`serverUrl`/`server_name`).
+MCP tools are resolved through `pi.registerToolRenderer` at render time, including tools that register after this extension loads or reappear when a session resumes. If MCP tools still appear unstyled, check that the tool's name or parameter schema matches one of the supported MCP detection heuristics (names containing `mcp`, `server:`, `ctx_`, or parameter schemas with `mcpServer`/`serverUrl`/`server_name`).
 
 For non-MCP extension tools, or MCP-like tools that do not match the heuristics, add the exact tool name under `customToolOverrides` and run `/reload`. Use `kind: "generic"` for ordinary tools and `kind: "mcp"` for MCP proxy-style arguments.
 
@@ -349,47 +364,41 @@ Those controls only appear when the corresponding capability is available in the
 ## Project structure
 
 ```text
-pi-tool-display/
-├── index.ts                         # Extension entrypoint for Pi auto-discovery
-├── src/
-│   ├── index.ts                     # Bootstrap and extension registration
-│   ├── capabilities.ts              # MCP/RTK capability detection
-│   ├── config-modal.ts              # /tool-display settings UI and command handling
-│   ├── config-store.ts              # Config load/save and normalization
-│   ├── disposable.ts                # Reload-safe cleanup registry for tool overrides, patches, and timers
-│   ├── diff-renderer.ts             # Edit/write diff rendering engine
-│   ├── line-width-safety.ts         # Width clamping helpers for narrow panes
-│   ├── pending-diff-preview.ts      # Partial edit/write preview projection helpers
-│   ├── presets.ts                   # Preset definitions and matching
-│   ├── render-utils.ts              # Shared rendering helpers
-│   ├── thinking-label.ts            # Thinking label formatting and context sanitization
-│   ├── tool-overrides.ts            # Built-in, MCP, and opt-in custom renderer overrides
-│   ├── types.ts                     # Shared config and type definitions
-│   ├── user-message-box-markdown.ts # Markdown extraction for user message rendering
-│   ├── user-message-box-native.ts   # Native user message box registration
-│   ├── user-message-box-patch.ts    # Safe native render patching helpers
-│   ├── user-message-box-renderer.ts # User message border renderer
-│   ├── user-message-box-utils.ts    # ANSI/background normalization helpers
-│   ├── write-display-utils.ts       # Write summary helpers
-│   └── zellij-modal.ts              # Modal UI primitives
-├── config/
-│   └── config.example.json          # Starter config template
-└── tests/
-    ├── ansi-utils.test.ts           # ANSI utility tests including foreground RGB preservation
-    ├── bash-display.test.ts         # Bash display and spinner tests
-    ├── capabilities-edge.test.ts    # Capability detection edge cases
-    ├── config-modal.test.ts         # Config modal tests
-    ├── custom-tool-overrides.test.ts # Opt-in custom tool override tests
-    ├── debug-logger-edge.test.ts    # Debug logger edge cases
-    ├── diff-renderer-ansi.test.ts   # ANSI/background handling tests for diff rendering
-    ├── diff-renderer-edge.test.ts   # Diff renderer edge case tests
-    ├── diff-renderer-width.test.ts  # Width and background coverage tests for diff rendering
-    ├── index-integration.test.ts    # Integration tests for extension lifecycle
-    ├── presets-edge.test.ts         # Preset edge case tests
-    ├── reload-behavior.test.ts      # Reload-safe cleanup and re-registration tests
-    ├── tool-overrides-config.test.ts    # Tool override config tests
-    ├── tool-overrides-registration.test.ts # Tool override registration tests
-    └── tool-ui-utils.test.ts        # Utility tests for user message and diff helpers
+pi-tool-display-next/
+|-- index.ts                          # Extension entrypoint
+|-- tool-display-api-consumer.d.ts    # Consumer helper type declarations
+|-- tool-display-api-consumer.js      # Consumer helper (adapter API)
+|-- config/
+|   `-- config.example.json           # Starter config template
+|-- src/
+|   |-- index.ts                      # Bootstrap and extension registration
+|   |-- agent-dir.ts                  # PI_CODING_AGENT_DIR resolution
+|   |-- ansi-utils.ts                 # ANSI helpers (wrapping, stripping)
+|   |-- bash-display.ts               # Bash output modes, truncation
+|   |-- bash-intent.ts                # `# intent:` header parsing and rendering
+|   |-- capabilities.ts               # MCP/RTK capability detection
+|   |-- codemode-display.ts           # Codemode row rendering
+|   |-- config-modal.ts               # /tool-display settings UI and command handling
+|   |-- config-store.ts               # Config load/save, normalization, legacy import
+|   |-- debug-logger.ts               # Opt-in debug logging
+|   |-- diff-presentation.ts          # Diff presentation helpers
+|   |-- diff-renderer.ts              # Edit/write diff rendering engine
+|   |-- disposable.ts                 # Reload-safe cleanup registry
+|   |-- extension-lifecycle.ts        # Session lifecycle wiring
+|   |-- line-width-safety.ts          # Width clamping helpers for narrow panes
+|   |-- modal-icons.ts                # Modal icon assets
+|   |-- pending-diff-preview.ts       # Partial edit/write preview projection
+|   |-- presets.ts                    # Preset definitions and matching
+|   |-- render-utils.ts               # Shared rendering helpers
+|   |-- settings-inspector-modal.ts   # Settings inspector UI
+|   |-- thinking-label.ts             # Thinking label gating and sanitization
+|   |-- tool-metadata.ts              # MCP candidate detection helpers
+|   |-- tool-overrides.ts             # registerToolRenderer resolver and render adapters
+|   |-- types.ts                      # Shared config and type definitions
+|   |-- user-message-box-*.ts         # Native user message box (patch, render, markdown, utils)
+|   |-- write-display-utils.ts        # Write summary helpers
+|   `-- zellij-modal.ts               # Modal UI primitives
+`-- tests/                            # 38 node:test suites run by `npm run test`
 ```
 
 ## Development
@@ -407,10 +416,10 @@ npm run check
 
 ## Related Pi Extensions
 
-- [pi-image-tools](https://github.com/MasuRii/pi-image-tools) — Image attachment and inline preview for the Pi TUI
-- [pi-hide-messages](https://github.com/MasuRii/pi-hide-messages) — Hide older chat messages without losing context
-- [pi-startup-redraw-fix](https://github.com/MasuRii/pi-startup-redraw-fix) — Fix terminal redraw glitches on startup
-- [pi-permission-system](https://github.com/MasuRii/pi-permission-system) — Permission enforcement for tool and command access
+- [pi-image-tools](https://github.com/MasuRii/pi-image-tools) - Image attachment and inline preview for the Pi TUI
+- [pi-hide-messages](https://github.com/MasuRii/pi-hide-messages) - Hide older chat messages without losing context
+- [pi-startup-redraw-fix](https://github.com/MasuRii/pi-startup-redraw-fix) - Fix terminal redraw glitches on startup
+- [pi-permission-system](https://github.com/MasuRii/pi-permission-system) - Permission enforcement for tool and command access
 
 ## License
 
