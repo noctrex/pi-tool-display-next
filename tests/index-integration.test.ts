@@ -28,16 +28,19 @@ function createApiStub(
     on: (event: string, handler: (...args: unknown[]) => unknown) => void;
     getAllTools: () => unknown[];
     getCommands: () => Array<{ name: string }>;
+    registerToolRenderer: (resolver: (toolName: string, next: () => unknown) => unknown) => void;
   }> = {},
 ): {
   api: ExtensionAPI;
   capturedTools: Array<{ name: string } & Record<string, unknown>>;
   capturedCommands: CapturedCommand[];
   capturedHandlers: CapturedHandler[];
+  capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown>;
 } {
   const capturedTools: Array<{ name: string } & Record<string, unknown>> = [];
   const capturedCommands: CapturedCommand[] = [];
   const capturedHandlers: CapturedHandler[] = [];
+  const capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown> = [];
 
   const api = {
     registerTool(tool: unknown): void {
@@ -52,6 +55,10 @@ function createApiStub(
       capturedHandlers.push({ event, handler });
       overrides.on?.(event, handler);
     },
+    registerToolRenderer(resolver: (toolName: string, next: () => unknown) => unknown): void {
+      capturedResolvers.push(resolver);
+      overrides.registerToolRenderer?.(resolver);
+    },
     getAllTools(): unknown[] {
       return overrides.getAllTools?.() ?? [];
     },
@@ -60,7 +67,7 @@ function createApiStub(
     },
   } as unknown as ExtensionAPI;
 
-  return { api, capturedTools, capturedCommands, capturedHandlers };
+  return { api, capturedTools, capturedCommands, capturedHandlers, capturedResolvers };
 }
 
 // ---------------------------------------------------------------------------
@@ -94,19 +101,16 @@ test("entry point registers tool-display command", () => {
   assert.ok(cmdNames.includes("tool-display"), "tool-display command registered");
 });
 
-test("entry point registers built-in tool overrides", () => {
-  const { api, capturedTools } = createApiStub();
+test("entry point installs a renderer resolver claiming the built-ins", () => {
+  const { api, capturedResolvers } = createApiStub();
   toolDisplayExtension(api);
 
-  const toolNames = capturedTools.map((t) => t.name);
-  // find, ls, write are registered immediately; read/grep/edit/bash are deferred
-  assert.ok(toolNames.includes("find"), "find tool override registered");
-  assert.ok(toolNames.includes("ls"), "ls tool override registered");
-  assert.ok(toolNames.includes("write"), "write tool override registered");
-
-  // Disabled tools (if config disables them) would not appear; the default
-  // config enables all, so we expect at least these 3 immediately.
-  assert.ok(toolNames.length >= 3, "at least 3 tool overrides registered immediately");
+  assert.ok(capturedResolvers.length >= 1, "renderer resolver installed");
+  const resolver = capturedResolvers[0];
+  for (const name of ["read", "grep", "find", "ls", "bash", "edit", "write"]) {
+    const renderers = resolver(name, () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", `${name} claimed by the resolver`);
+  }
 });
 
 test("session_start handler refreshes capabilities and notifies pending errors", async () => {
@@ -139,19 +143,19 @@ test("before_agent_start handler refreshes capabilities without crashing", async
 });
 
 test("multiple calls to toolDisplayExtension are idempotent", () => {
-  const { api, capturedTools, capturedCommands, capturedHandlers } = createApiStub();
+  const { api, capturedCommands, capturedResolvers } = createApiStub();
 
   // Call twice
   toolDisplayExtension(api);
   toolDisplayExtension(api);
 
-  // Second call should not throw. Tools may be registered again (that's up
-  // to the extension loader to deduplicate), but the extension itself must
-  // not crash.
-  const toolNames = capturedTools.map((t) => t.name);
-  assert.ok(toolNames.filter((n) => n === "find").length >= 1, "find registered at least once");
-  assert.ok(toolNames.filter((n) => n === "ls").length >= 1, "ls registered at least once");
-  assert.ok(toolNames.filter((n) => n === "write").length >= 1, "write registered at least once");
+  // Second call should not throw. Each runtime installs its own renderer
+  // resolver; the extension itself must not crash.
+  assert.ok(capturedResolvers.length >= 2, "a resolver is installed per call");
+  for (const resolver of capturedResolvers) {
+    const renderers = resolver("write", () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", "write claimed by each resolver");
+  }
 
   const cmdNames = capturedCommands.map((c) => c.name);
   assert.ok(cmdNames.filter((n) => n === "tool-display").length >= 1, "command registered at least once");
@@ -334,21 +338,14 @@ test("overridden tools include renderCall and renderResult functions", () => {
   }
 });
 
-test("overridden tools preserve promptSnippet and promptGuidelines from built-ins", () => {
-  const { api, capturedTools } = createApiStub();
+test("renderer claims leave the built-in tool objects untouched", () => {
+  const { api, capturedTools, capturedResolvers } = createApiStub();
   toolDisplayExtension(api);
 
-  const byName = new Map(capturedTools.map((t) => [t.name, t]));
+  // No re-registration happens, so there is nothing to carry copied metadata.
+  assert.equal(capturedTools.length, 0, "no tool objects are registered by the extension");
 
-  // read (deferred) won't be registered immediately; it's deferred
-  // So we only check tools registered immediately
-  for (const name of ["find", "ls", "write"] as const) {
-    const tool = byName.get(name);
-    assert.ok(tool, `${name} is registered`);
-    // promptSnippet should be a non-empty string or undefined
-    // (built-in tools may or may not have promptSnippet)
-    if (tool.promptSnippet !== undefined) {
-      assert.equal(typeof tool.promptSnippet, "string");
-    }
-  }
+  // Resolution is name-based and does not depend on built-in metadata.
+  const renderers = capturedResolvers[0]("read", () => undefined) as { renderCall?: unknown };
+  assert.equal(typeof renderers?.renderCall, "function", "read claimed without any metadata copying");
 });

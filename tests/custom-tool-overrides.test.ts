@@ -24,19 +24,14 @@ interface RenderComponentLike {
 	render(width: number): string[];
 }
 
-interface RuntimeTool extends Record<string, unknown> {
+interface ResolvedRenderersLike {
 	name: string;
-	description?: string;
-	parameters?: unknown;
 	renderCall?: (...args: unknown[]) => RenderComponentLike;
 	renderResult?: (...args: unknown[]) => RenderComponentLike;
-	execute?: (...args: unknown[]) => unknown;
+	renderShell?: unknown;
 }
 
-interface ToolEventHandlers {
-	session_start?: () => Promise<void> | void;
-	before_agent_start?: () => Promise<void> | void;
-}
+type ResolverFn = (toolName: string, next: () => unknown) => unknown;
 
 function buildConfigWithCustomOverrides(
 	customToolOverrides: Record<string, unknown>,
@@ -53,40 +48,36 @@ function buildConfigWithCustomOverrides(
 	} as ToolDisplayConfig;
 }
 
-function createExtensionApiStub(allTools: RuntimeTool[] = []): {
+function createExtensionApiStub(): {
 	api: ExtensionAPI;
-	registeredTools: RuntimeTool[];
-	runtimeTools: RuntimeTool[];
-	eventHandlers: ToolEventHandlers;
+	resolvers: ResolverFn[];
+	eventHandlers: Record<string, (...args: unknown[]) => unknown>;
 } {
-	const registeredTools: RuntimeTool[] = [];
-	const eventHandlers: ToolEventHandlers = {};
+	const resolvers: ResolverFn[] = [];
+	const eventHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 	const api = {
-		registerTool(tool: RuntimeTool): void {
-			registeredTools.push(tool);
-		},
-		on(event: keyof ToolEventHandlers, handler: () => Promise<void> | void): void {
+		on(event: string, handler: (...args: unknown[]) => unknown): void {
 			eventHandlers[event] = handler;
 		},
-		getAllTools(): RuntimeTool[] {
-			const names = new Set(allTools.map((tool) => tool.name));
-			const defaultBuiltIns: RuntimeTool[] = ["read", "edit"]
-				.filter((name) => !names.has(name))
-				.map((name) => ({
-					name,
-					description: `Built-in ${name} tool`,
-					sourceInfo: { source: "builtin", path: `<builtin:${name}>` },
-				}));
-			return [...defaultBuiltIns, ...allTools];
+		registerToolRenderer(resolver: ResolverFn): void {
+			resolvers.push(resolver);
 		},
 	} as unknown as ExtensionAPI;
-
-	return { api, registeredTools, runtimeTools: allTools, eventHandlers };
+	return { api, resolvers, eventHandlers };
 }
 
-async function runLifecycle(eventHandlers: ToolEventHandlers): Promise<void> {
-	await eventHandlers.session_start?.();
-	await eventHandlers.before_agent_start?.();
+function claimRenderers(
+	stub: ReturnType<typeof createExtensionApiStub>,
+	toolName: string,
+): ResolvedRenderersLike | undefined {
+	assert.ok(stub.resolvers.length > 0, "expected a registerToolRenderer resolver to be installed");
+	const resolved = stub.resolvers[stub.resolvers.length - 1](toolName, () => undefined) as
+		| Omit<ResolvedRenderersLike, "name">
+		| undefined;
+	if (!resolved) {
+		return undefined;
+	}
+	return { name: toolName, ...resolved };
 }
 
 function createTheme(): RenderThemeLike {
@@ -108,22 +99,22 @@ function renderToText(component: unknown): string {
 		.trim();
 }
 
-function renderToolResult(tool: RuntimeTool, text: string, options: Record<string, unknown> = {}): string {
+function renderToolResult(renderers: ResolvedRenderersLike, text: string, options: Record<string, unknown> = {}): string {
 	return renderToolRawResult(
-		tool,
+		renderers,
 		{ content: [{ type: "text", text }], details: {} },
 		options,
 	);
 }
 
 function renderToolRawResult(
-	tool: RuntimeTool,
+	renderers: ResolvedRenderersLike,
 	result: Record<string, unknown>,
 	options: Record<string, unknown> = {},
 ): string {
-	assert.equal(typeof tool.renderResult, "function", `expected ${tool.name} to have renderResult`);
+	assert.equal(typeof renderers.renderResult, "function", `expected ${renderers.name} to have renderResult`);
 	return renderToText(
-		tool.renderResult(
+		renderers.renderResult(
 			result,
 			{ expanded: false, isPartial: false, ...options },
 			createTheme(),
@@ -160,103 +151,67 @@ test("normalizeToolDisplayConfig normalizes custom tool override shorthand, defa
 	});
 });
 
-test("enabled generic custom tool override replaces existing extension renderers and leaves other tools alone", async () => {
-	const enabledTool: RuntimeTool = {
-		name: "ide_find_symbol",
-		description: "Find symbols through an IDE index.",
-		parameters: {},
-		execute: () => {},
-		renderCall: () => ({ render: () => ["RAW ENABLED CALL"] }),
-		renderResult: () => ({ render: () => ["RAW ENABLED RESULT"] }),
-	};
-	const disabledTool: RuntimeTool = {
-		name: "disabled_noisy_tool",
-		description: "Noisy extension tool that should keep its own renderer while disabled.",
-		parameters: {},
-		execute: () => {},
-		renderCall: () => ({ render: () => ["RAW DISABLED CALL"] }),
-		renderResult: () => ({ render: () => ["RAW DISABLED RESULT"] }),
-	};
-	const unlistedTool: RuntimeTool = {
-		name: "unlisted_noisy_tool",
-		description: "Noisy extension tool that was not explicitly opted in.",
-		parameters: {},
-		execute: () => {},
-		renderCall: () => ({ render: () => ["RAW UNLISTED CALL"] }),
-		renderResult: () => ({ render: () => ["RAW UNLISTED RESULT"] }),
-	};
+test("enabled generic custom override renders configured tools and leaves others to next()", () => {
 	const config = buildConfigWithCustomOverrides({
 		ide_find_symbol: { enabled: true, outputMode: "summary" },
 		disabled_noisy_tool: { enabled: false, outputMode: "summary" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([enabledTool, disabledTool, unlistedTool]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
 
-	assert.equal(renderToText(enabledTool.renderCall?.({ query: "Widget", limit: 5 }, createTheme())), "ide_find_symbol (2 args)");
-	assert.equal(renderToolResult(enabledTool, "alpha\nbeta\ngamma\n"), "↳ 3 lines returned • Ctrl+O to expand");
-	assert.equal(renderToText(disabledTool.renderCall?.({}, createTheme())), "RAW DISABLED CALL");
-	assert.equal(renderToolResult(disabledTool, "ignored"), "RAW DISABLED RESULT");
-	assert.equal(renderToText(unlistedTool.renderCall?.({}, createTheme())), "RAW UNLISTED CALL");
-	assert.equal(renderToolResult(unlistedTool, "ignored"), "RAW UNLISTED RESULT");
+	const enabled = claimRenderers(stub, "ide_find_symbol");
+	assert.ok(enabled?.renderCall && enabled.renderResult, "enabled custom tool claimed");
+
+	assert.equal(renderToText(enabled.renderCall?.({ query: "Widget", limit: 5 }, createTheme())), "ide_find_symbol (2 args)");
+	assert.equal(renderToolResult(enabled, "alpha\nbeta\ngamma\n"), "↳ 3 lines returned • Ctrl+O to expand");
+
+	const sentinel = Symbol("next");
+	assert.equal(stub.resolvers[0]("disabled_noisy_tool", () => sentinel), sentinel, "disabled override passes through");
+	assert.equal(stub.resolvers[0]("unlisted_noisy_tool", () => sentinel), sentinel, "unlisted tool passes through");
 });
 
-test("custom tool override defaults kind to generic unless the user chooses mcp", async () => {
-	const genericTool: RuntimeTool = {
-		name: "remote_gateway",
-		description: "Calls a remote integration with plain generic rendering.",
-		parameters: {},
-		execute: () => {},
-	};
-	const mcpTool: RuntimeTool = {
-		name: "remote_gateway_structured",
-		description: "Calls a remote integration with user-selected structured rendering.",
-		parameters: {},
-		execute: () => {},
-	};
+test("custom tool override defaults kind to generic unless the user chooses mcp", () => {
 	const config = buildConfigWithCustomOverrides({
 		remote_gateway: { enabled: true },
 		remote_gateway_structured: { enabled: true, kind: "mcp" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([genericTool, mcpTool]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
 
-	assert.equal(renderToText(genericTool.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "remote_gateway (2 args)");
-	assert.equal(renderToText(mcpTool.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "MCP call filesystem:read_file (2 args)");
+	const generic = claimRenderers(stub, "remote_gateway");
+	const mcp = claimRenderers(stub, "remote_gateway_structured");
+
+	assert.equal(renderToText(generic?.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "remote_gateway (2 args)");
+	assert.equal(renderToText(mcp?.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "MCP call filesystem:read_file (2 args)");
 });
 
-test("custom generic tool override honors per-tool hidden output mode", async () => {
-	const quietTool: RuntimeTool = {
-		name: "large_payload_tool",
-		description: "Produces huge payloads that the user wants hidden.",
-		parameters: {},
-		execute: () => {},
-	};
+test("custom generic tool override honors per-tool hidden output mode", () => {
 	const config = buildConfigWithCustomOverrides({
 		large_payload_tool: { enabled: true, outputMode: "hidden" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([quietTool]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
 
-	assert.equal(renderToolResult(quietTool, "secret\nnoisy\noutput\n"), "");
+	const quiet = claimRenderers(stub, "large_payload_tool");
+	assert.equal(renderToolResult(quiet as ResolvedRenderersLike, "secret\nnoisy\noutput\n"), "");
 });
 
-test("custom tool overrides ignore missing tools instead of registering phantom tools", async () => {
+test("custom tool overrides register nothing for missing tools", () => {
 	const config = buildConfigWithCustomOverrides({
 		missing_tool: { enabled: true, outputMode: "summary" },
 	});
-	const { api, registeredTools, runtimeTools, eventHandlers } = createExtensionApiStub([]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	// The stub exposes no registerTool: configuring an absent tool must not
+	// try to register a phantom tool.
+	assert.doesNotThrow(() => registerToolDisplayOverrides(stub.api, () => config));
 
-	assert.equal(runtimeTools.some((tool) => tool.name === "missing_tool"), false);
-	assert.equal(registeredTools.some((tool) => tool.name === "missing_tool"), false);
+	// If the tool ever appears, its configured rendering resolves by name.
+	const renderers = claimRenderers(stub, "missing_tool");
+	assert.equal(typeof renderers?.renderResult, "function", "configured name resolves when it appears");
 });
 
 test("normalizeToolDisplayConfig treats malformed customToolOverrides containers as empty", () => {
@@ -285,93 +240,75 @@ test("normalizeToolDisplayConfig preserves supported custom output modes and dro
 	});
 });
 
-test("generic custom tool renderCall handles absent, non-object, and nested arguments safely", async () => {
-	const argumentProbe: RuntimeTool = {
-		name: "argument_probe",
-		description: "Noisy extension tool with unpredictable arguments.",
-		parameters: {},
-		execute: () => {},
-	};
+test("generic custom tool renderCall handles absent, non-object, and nested arguments safely", () => {
 	const config = buildConfigWithCustomOverrides({
 		argument_probe: { enabled: true, outputMode: "summary" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([argumentProbe]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
+	const probe = claimRenderers(stub, "argument_probe") as ResolvedRenderersLike;
 
-	assert.equal(renderToText(argumentProbe.renderCall?.(undefined, createTheme())), "argument_probe (no args)");
-	assert.equal(renderToText(argumentProbe.renderCall?.(null, createTheme())), "argument_probe (no args)");
-	assert.equal(renderToText(argumentProbe.renderCall?.("raw string args", createTheme())), "argument_probe (no args)");
-	assert.equal(renderToText(argumentProbe.renderCall?.(["array", "args"], createTheme())), "argument_probe (no args)");
+	assert.equal(renderToText(probe.renderCall?.(undefined, createTheme())), "argument_probe (no args)");
+	assert.equal(renderToText(probe.renderCall?.(null, createTheme())), "argument_probe (no args)");
+	assert.equal(renderToText(probe.renderCall?.("raw string args", createTheme())), "argument_probe (no args)");
+	assert.equal(renderToText(probe.renderCall?.(["array", "args"], createTheme())), "argument_probe (no args)");
 	assert.equal(
-		renderToText(argumentProbe.renderCall?.({ path: "src/index.ts", options: { recursive: true }, tags: ["a", "b"] }, createTheme())),
+		renderToText(probe.renderCall?.({ path: "src/index.ts", options: { recursive: true }, tags: ["a", "b"] }, createTheme())),
 		"argument_probe (3 args)",
 	);
 });
 
-test("generic custom tool preview mode supports collapsed previews, expanded previews, partial state, and empty text", async () => {
-	const previewTool: RuntimeTool = {
-		name: "preview_payload_tool",
-		description: "Produces output that should be previewed instead of summarized.",
-		parameters: {},
-		execute: () => {},
-	};
+test("generic custom tool preview mode supports collapsed previews, expanded previews, partial state, and empty text", () => {
 	const config = buildConfigWithCustomOverrides(
 		{ preview_payload_tool: { enabled: true, outputMode: "preview" } },
 		{ previewLines: 2 },
 	);
-	const { api, eventHandlers } = createExtensionApiStub([previewTool]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
+	const preview = claimRenderers(stub, "preview_payload_tool") as ResolvedRenderersLike;
 
 	assert.equal(
-		renderToolResult(previewTool, "alpha\nbeta\ngamma\ndelta\n"),
+		renderToolResult(preview, "alpha\nbeta\ngamma\ndelta\n"),
 		"alpha\nbeta\n... (2 more lines • Ctrl+O to expand)",
 	);
 	assert.equal(
-		renderToolResult(previewTool, "alpha\nbeta\ngamma\ndelta\n", { expanded: true }),
+		renderToolResult(preview, "alpha\nbeta\ngamma\ndelta\n", { expanded: true }),
 		"alpha\nbeta\ngamma\ndelta",
 	);
-	assert.equal(renderToolResult(previewTool, "still running", { isPartial: true }), "running...");
+	assert.equal(renderToolResult(preview, "still running", { isPartial: true }), "running...");
 	assert.equal(
-		renderToolRawResult(previewTool, { content: [{ type: "image", data: "ignored" }], details: {} }),
+		renderToolRawResult(preview, { content: [{ type: "image", data: "ignored" }], details: {} }),
 		"↳ (no output)",
 	);
-	assert.equal(renderToolRawResult(previewTool, { details: {} }), "↳ (no output)");
+	assert.equal(renderToolRawResult(preview, { details: {} }), "↳ (no output)");
 });
 
-test("explicit mcp custom tool override interprets MCP proxy argument variants", async () => {
-	const customMcpProxy: RuntimeTool = {
-		name: "custom_gateway",
-		description: "Custom gateway that should render as MCP because the user opted in.",
-		parameters: {},
-		execute: () => {},
-	};
+test("explicit mcp custom tool override interprets MCP proxy argument variants", () => {
 	const config = buildConfigWithCustomOverrides({
 		custom_gateway: { enabled: true, kind: "mcp", outputMode: "summary" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([customMcpProxy]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
+	const gateway = claimRenderers(stub, "custom_gateway") as ResolvedRenderersLike;
 
-	assert.equal(renderToText(customMcpProxy.renderCall?.({}, createTheme())), "MCP status (no args)");
-	assert.equal(renderToText(customMcpProxy.renderCall?.({ connect: "filesystem" }, createTheme())), "MCP connect filesystem (1 arg)");
-	assert.equal(renderToText(customMcpProxy.renderCall?.({ describe: "read_file", server: "filesystem" }, createTheme())), "MCP describe read_file @filesystem (2 args)");
-	assert.equal(renderToText(customMcpProxy.renderCall?.({ search: "browser", server: "exa" }, createTheme())), "MCP search \"browser\" @exa (2 args)");
-	assert.equal(renderToText(customMcpProxy.renderCall?.({ server: "filesystem" }, createTheme())), "MCP tools filesystem (1 arg)");
-	assert.equal(renderToText(customMcpProxy.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "MCP call filesystem:read_file (2 args)");
+	assert.equal(renderToText(gateway.renderCall?.({}, createTheme())), "MCP status (no args)");
+	assert.equal(renderToText(gateway.renderCall?.({ connect: "filesystem" }, createTheme())), "MCP connect filesystem (1 arg)");
+	assert.equal(renderToText(gateway.renderCall?.({ describe: "read_file", server: "filesystem" }, createTheme())), "MCP describe read_file @filesystem (2 args)");
+	assert.equal(renderToText(gateway.renderCall?.({ search: "browser", server: "exa" }, createTheme())), "MCP search \"browser\" @exa (2 args)");
+	assert.equal(renderToText(gateway.renderCall?.({ server: "filesystem" }, createTheme())), "MCP tools filesystem (1 arg)");
+	assert.equal(renderToText(gateway.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme())), "MCP call filesystem:read_file (2 args)");
 });
 
-test("custom tool override preserves execution contract, parameters, and prepareArguments", async () => {
+test("custom overrides never mutate the tool object", () => {
 	const execute = (): string => "executed";
 	const prepareArguments = (args: unknown): unknown => args;
 	const parameters = { type: "object", properties: { query: { type: "string" } } };
-	const contractTool: RuntimeTool = {
+	const contractTool = {
 		name: "contract_tool",
-		description: "Tool with runtime behavior that must survive decoration.",
+		description: "Tool with runtime behavior that must survive rendering overrides.",
 		parameters,
 		execute,
 		prepareArguments,
@@ -379,36 +316,30 @@ test("custom tool override preserves execution contract, parameters, and prepare
 	const config = buildConfigWithCustomOverrides({
 		contract_tool: { enabled: true, outputMode: "summary" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([contractTool]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
+	void claimRenderers(stub, "contract_tool");
 
-	assert.equal(contractTool.execute, execute);
-	assert.equal(contractTool.prepareArguments, prepareArguments);
-	assert.equal(contractTool.parameters, parameters);
-	assert.equal(typeof contractTool.renderCall, "function");
-	assert.equal(typeof contractTool.renderResult, "function");
+	assert.equal(contractTool.execute, execute, "execute untouched");
+	assert.equal(contractTool.prepareArguments, prepareArguments, "prepareArguments untouched");
+	assert.equal(contractTool.parameters, parameters, "parameters untouched");
+	assert.equal((contractTool as { renderCall?: unknown }).renderCall, undefined, "no injected renderCall");
+	assert.equal((contractTool as { renderResult?: unknown }).renderResult, undefined, "no injected renderResult");
 });
 
-test("custom tool registered after lifecycle is decorated when it is explicitly opted in", async () => {
+test("custom overrides resolve regardless of registration timing", () => {
 	const config = buildConfigWithCustomOverrides({
 		late_custom_tool: { enabled: true, outputMode: "summary" },
 	});
-	const { api, eventHandlers } = createExtensionApiStub([]);
+	const stub = createExtensionApiStub();
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
 
-	const lateTool: RuntimeTool = {
-		name: "late_custom_tool",
-		description: "Tool registered after lifecycle by another extension.",
-		parameters: {},
-		execute: () => {},
-	};
-	(api as unknown as { registerTool(tool: RuntimeTool): void }).registerTool(lateTool);
-
-	assert.equal(typeof lateTool.renderCall, "function");
-	assert.equal(typeof lateTool.renderResult, "function");
-	assert.equal(renderToText(lateTool.renderCall?.({ query: "late" }, createTheme())), "late_custom_tool (1 arg)");
+	// Registration order is irrelevant: the resolver answers by name at
+	// render time, before and after any lifecycle event.
+	const renderers = claimRenderers(stub, "late_custom_tool");
+	assert.equal(typeof renderers?.renderCall, "function");
+	assert.equal(typeof renderers?.renderResult, "function");
+	assert.equal(renderToText(renderers?.renderCall?.({ query: "late" }, createTheme())), "late_custom_tool (1 arg)");
 });

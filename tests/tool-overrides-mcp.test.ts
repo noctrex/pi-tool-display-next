@@ -12,22 +12,6 @@ interface RenderThemeLike {
 	bold(value: string): string;
 }
 
-interface RegisteredToolLike {
-	name: string;
-	description?: string;
-	parameters?: unknown;
-	promptSnippet?: string;
-	promptGuidelines?: string[];
-	renderCall?: (...args: unknown[]) => unknown;
-	renderResult?: (...args: unknown[]) => unknown;
-	execute?: (...args: unknown[]) => unknown;
-}
-
-interface ToolEventHandlers {
-	session_start?: () => Promise<void> | void;
-	before_agent_start?: () => Promise<void> | void;
-}
-
 interface RuntimeTool extends Record<string, unknown> {
 	name: string;
 	description: string;
@@ -35,10 +19,17 @@ interface RuntimeTool extends Record<string, unknown> {
 	execute?: (...args: unknown[]) => unknown;
 	renderCall?: (...args: unknown[]) => unknown;
 	renderResult?: (...args: unknown[]) => unknown;
-	promptSnippet?: string;
-	promptGuidelines?: string[];
 	label?: string;
 }
+
+interface ResolvedRenderersLike {
+	name: string;
+	renderCall?: (...args: unknown[]) => unknown;
+	renderResult?: (...args: unknown[]) => unknown;
+	renderShell?: unknown;
+}
+
+type ResolverFn = (toolName: string, next: () => unknown) => unknown;
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -53,44 +44,39 @@ function buildConfig(overrides: Partial<ToolDisplayConfig>): ToolDisplayConfig {
 	};
 }
 
-function withDefaultReadEditOwners(tools: RuntimeTool[] = []): RuntimeTool[] {
-	const names = new Set(tools.map((t) => t.name));
-	const defaults: RuntimeTool[] = ["read", "edit"]
-		.filter((name) => !names.has(name))
-		.map((name) => ({
-			name,
-			description: `Built-in ${name} tool`,
-			sourceInfo: { source: "builtin", path: `<builtin:${name}>` },
-		}));
-	return [...defaults, ...tools];
-}
-
 function createExtensionApiStub(allTools: RuntimeTool[] = []): {
 	api: ExtensionAPI;
-	registeredTools: RegisteredToolLike[];
-	runtimeTools: RuntimeTool[];
-	eventHandlers: ToolEventHandlers;
+	resolvers: ResolverFn[];
+	allTools: RuntimeTool[];
 } {
-	const registeredTools: RegisteredToolLike[] = [];
-	const eventHandlers: ToolEventHandlers = {};
+	const resolvers: ResolverFn[] = [];
 	const api = {
-		registerTool(tool: RegisteredToolLike): void {
-			registeredTools.push(tool);
+		on(_event: string, _handler: (...args: unknown[]) => unknown): void {
+			// Lifecycle handlers are irrelevant to resolution; the resolver
+			// answers at render time.
 		},
-		on(event: keyof ToolEventHandlers, handler: () => Promise<void> | void): void {
-			eventHandlers[event] = handler;
+		registerToolRenderer(resolver: ResolverFn): void {
+			resolvers.push(resolver);
 		},
 		getAllTools(): RuntimeTool[] {
-			return withDefaultReadEditOwners(allTools);
+			return allTools;
 		},
 	} as unknown as ExtensionAPI;
-
-	return { api, registeredTools, runtimeTools: allTools, eventHandlers };
+	return { api, resolvers, allTools };
 }
 
-async function runLifecycle(eventHandlers: ToolEventHandlers): Promise<void> {
-	await eventHandlers.session_start?.();
-	await eventHandlers.before_agent_start?.();
+function claimRenderers(
+	stub: ReturnType<typeof createExtensionApiStub>,
+	toolName: string,
+): ResolvedRenderersLike | undefined {
+	assert.ok(stub.resolvers.length > 0, "expected a registerToolRenderer resolver to be installed");
+	const resolved = stub.resolvers[stub.resolvers.length - 1](toolName, () => undefined) as
+		| Omit<ResolvedRenderersLike, "name">
+		| undefined;
+	if (!resolved) {
+		return undefined;
+	}
+	return { name: toolName, ...resolved };
 }
 
 function createTheme(): RenderThemeLike {
@@ -169,273 +155,168 @@ test("isMcpToolCandidate returns false when tool is a string", () => {
 	assert.equal(isMcpToolCandidate("mcp"), false);
 });
 
-// ─── MCP Decoration ──────────────────────────────────────────────────────────
+// ─── MCP Resolution via the Renderer Resolver ────────────────────────────────
 
-test("MCP tool receives renderCall and renderResult decorations after lifecycle", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([mcpTool]);
+test("MCP proxy tool resolves renderCall and renderResult without any lifecycle events", () => {
+	const stub = createExtensionApiStub([
+		{
+			name: "mcp",
+			description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
+			parameters: {},
+			execute: () => {},
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	assert.equal(typeof mcpTool.renderCall, "function", "MCP proxy should get renderCall");
-	assert.equal(typeof mcpTool.renderResult, "function", "MCP proxy should get renderResult");
-	assert.equal(mcpTool.label, "MCP Proxy");
+	const renderers = claimRenderers(stub, "mcp");
+	assert.equal(typeof renderers?.renderCall, "function", "MCP proxy resolves renderCall");
+	assert.equal(typeof renderers?.renderResult, "function", "MCP proxy resolves renderResult");
 });
 
-test("MCP tool decoration preserves execute function", async () => {
+test("MCP resolution never touches the tool object", () => {
 	const mcpTool: RuntimeTool = {
 		name: "mcp",
 		description: "Unified MCP gateway.",
 		parameters: {},
 		execute: () => "executed",
+		renderCall: () => ({ render: () => ["RAW"] }),
+		renderResult: () => ({ render: () => ["RAW"] }),
 	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+	const stub = createExtensionApiStub([mcpTool]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+	void claimRenderers(stub, "mcp");
 
-	assert.equal(typeof mcpTool.execute, "function", "execute should be preserved");
+	assert.equal(mcpTool.execute, mcpTool.execute, "execute untouched");
+	assert.equal(mcpTool.renderCall, mcpTool.renderCall, "native renderers untouched");
+	assert.equal(mcpTool.label, undefined, "label untouched");
+	assert.equal(mcpTool.promptSnippet, undefined, "prompt metadata untouched");
 });
 
-test("MCP tool without execute function gets rendered without it", async () => {
-	// Tool from pi.getAllTools() that has no execute — rendering should still work
-	const mcpTool: RuntimeTool = {
-		name: "example_mcp",
-		description: "An MCP example tool for testing.",
-		parameters: {},
-	};
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([mcpTool]);
+test("MCP-named tool without execute or parameters resolves renderers", () => {
+	const stub = createExtensionApiStub([
+		{
+			name: "example_mcp",
+			description: "An MCP example tool for testing.",
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	assert.equal(typeof mcpTool.renderCall, "function", "should get renderCall even without execute");
-	assert.equal(typeof mcpTool.renderResult, "function", "should get renderResult even without execute");
+	const renderers = claimRenderers(stub, "example_mcp");
+	assert.equal(typeof renderers?.renderCall, "function");
+	assert.equal(typeof renderers?.renderResult, "function");
 });
 
-test("MCP tool with missing parameters still gets decorations", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "minimal_mcp",
-		description: "An MCP tool.",
-		// No parameters field
-		execute: () => {},
-	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+test("unregistered MCP tool (resumed session, server not yet connected) still resolves renderers", () => {
+	// No getAllTools entries at all: resolution falls back to name heuristics.
+	const stub = createExtensionApiStub([]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	assert.equal(typeof mcpTool.renderCall, "function");
-	assert.equal(typeof mcpTool.renderResult, "function");
+	const renderers = claimRenderers(stub, "mcp");
+	assert.equal(typeof renderers?.renderCall, "function", "unregistered proxy still claimed");
 });
 
-// ─── wrappedMcpToolNames: No Double Decoration ───────────────────────────────
-
-test("MCP tool is not decorated twice when registerMcpToolOverrides runs multiple times", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "single_mcp",
-		description: "An MCP tool.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([mcpTool]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-
-	// Run lifecycle multiple times (simulating multiple session_start events)
-	await runLifecycle(eventHandlers);
-	await runLifecycle(eventHandlers);
-
-	// renderCall should only be set once — verify it's a function and calling it works
-	assert.equal(typeof mcpTool.renderCall, "function");
-	const firstRenderCall = mcpTool.renderCall;
-	// Running lifecycle again should not replace renderCall
-	await runLifecycle(eventHandlers);
-	assert.equal(mcpTool.renderCall, firstRenderCall, "renderCall should not be replaced on second decoration pass");
-});
-
-// ─── Late MCP Tool Registration (Race Condition) ─────────────────────────────
-
-test("MCP tool registered AFTER session_start but BEFORE before_agent_start gets decorated", async () => {
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-
-	// session_start fires
-	await eventHandlers.session_start?.();
-
-	// Another extension registers an MCP tool after session_start
-	const lateMcpTool: RuntimeTool = {
-		name: "late_registered_mcp",
-		description: "MCP tool registered after session start.",
-		parameters: {},
-		execute: () => {},
-	};
-	runtimeTools.push(lateMcpTool);
-
-	// before_agent_start fires — should discover the late tool
-	await eventHandlers.before_agent_start?.();
-
-	assert.equal(
-		typeof lateMcpTool.renderCall,
-		"function",
-		"late-registered MCP tool should be decorated at before_agent_start",
-	);
-});
-
-test("MCP tool discovered after both session_start and before_agent_start is decorated by delayed discovery", async () => {
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-
-	await runLifecycle(eventHandlers);
-
-	const veryLateMcpTool: RuntimeTool = {
-		name: "very_late_mcp",
-		description: "A tool using MCP protocol registered after lifecycle.",
-		parameters: {},
-		execute: () => {},
-	};
-	runtimeTools.push(veryLateMcpTool);
-
-	await new Promise((resolve) => setTimeout(resolve, 80));
-
-	assert.equal(
-		typeof veryLateMcpTool.renderCall,
-		"function",
-		"tool discovered after full lifecycle should be decorated by retry discovery",
-	);
-});
-
-test("MCP tools registered before lifecycle are all decorated after session_start", async () => {
-	const mcpTools: RuntimeTool[] = [
-		{ name: "mcp_user_search", description: "Search users via MCP.", parameters: {}, execute: () => {} },
-		{ name: "mcp_db_query", description: "Query database via MCP.", parameters: {}, execute: () => {} },
+test("MCP tools with MCP descriptions resolve via getAllTools metadata", () => {
+	const tools: RuntimeTool[] = [
+		{ name: "filesystem_list", description: "List files via MCP.", parameters: {}, execute: () => {} },
+		{ name: "db_query", description: "Query database via MCP.", parameters: {}, execute: () => {} },
+		{ name: "web_search", description: "Search via MCP.", parameters: {}, execute: () => {} },
 	];
-	const { api, eventHandlers } = createExtensionApiStub(mcpTools);
+	const stub = createExtensionApiStub(tools);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await eventHandlers.session_start?.();
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	for (const tool of mcpTools) {
-		assert.equal(
-			typeof tool.renderCall,
-			"function",
-			`MCP tool '${tool.name}' should be decorated after session_start`,
-		);
+	for (const tool of tools) {
+		const renderers = claimRenderers(stub, tool.name);
+		assert.equal(typeof renderers?.renderCall, "function", `${tool.name} claimed by description heuristic`);
+		assert.equal(typeof renderers?.renderResult, "function", `${tool.name} result claimed`);
 	}
+});
+
+test("non-MCP tools with plain descriptions pass through", () => {
+	const stub = createExtensionApiStub([
+		{ name: "some_tool", description: "McPherson's local utility.", parameters: {} },
+	]);
+
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+	const sentinel = Symbol("next");
+	assert.equal(stub.resolvers[0]("some_tool", () => sentinel), sentinel);
 });
 
 // ─── MCP renderCall Output ───────────────────────────────────────────────────
 
-test("MCP renderCall shows tool target and arg count with no args", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+test("MCP renderCall shows tool target and arg count with no args", () => {
+	const stub = createExtensionApiStub([
+		{
+			name: "mcp",
+			description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
+			parameters: {},
+			execute: () => {},
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+	const renderers = claimRenderers(stub, "mcp");
 
-	const component = mcpTool.renderCall!({}, createTheme());
-	const rendered = (component as { render: (w: number) => string[] }).render(120).map(l => l.trimEnd()).join("\n").trim();
-	assert.equal(rendered, "MCP status (no args)");
+	const component = renderers?.renderCall?.({}, createTheme());
+	assert.equal(renderToText(component), "MCP status (no args)");
 });
 
-test("MCP renderCall shows server:tool when both tool and server args are present", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		description: "Unified MCP gateway.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+test("MCP renderCall shows server:tool when both tool and server args are present", () => {
+	const stub = createExtensionApiStub([
+		{
+			name: "mcp",
+			description: "Unified MCP gateway.",
+			parameters: {},
+			execute: () => {},
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+	const renderers = claimRenderers(stub, "mcp");
 
-	const component = mcpTool.renderCall!({ tool: "read_file", server: "filesystem" }, createTheme());
+	const component = renderers?.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme());
 	assert.equal(renderToText(component), "MCP call filesystem:read_file (2 args)");
 });
 
 // ─── Existing MCP Adapter Renderers ──────────────────────────────────────────
 
-test("pi-mcp-adapter tools with existing renderers are overridden by MCP display decoration", async () => {
+test("resolver overrides native renderers of pi-mcp-adapter style tools", () => {
 	const config = buildConfig({ mcpOutputMode: "summary" });
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		label: "MCP",
-		description: "MCP gateway - connect to MCP servers and call their tools",
-		parameters: {},
-		execute: () => {},
-		renderCall: () => ({ render: () => ["RAW MCP CALL"] }),
-		renderResult: () => ({ render: () => ["RAW MCP RESULT"] }),
-	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+	const stub = createExtensionApiStub([
+		{
+			name: "mcp",
+			label: "MCP",
+			description: "MCP gateway - connect to MCP servers and call their tools",
+			parameters: {},
+			execute: () => {},
+			renderCall: () => ({ render: () => ["RAW MCP CALL"] }),
+			renderResult: () => ({ render: () => ["RAW MCP RESULT"] }),
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
+	const renderers = claimRenderers(stub, "mcp");
 
-	const callText = renderToText(mcpTool.renderCall!({ tool: "read_file", server: "filesystem" }, createTheme()));
-	const resultText = renderToText(mcpTool.renderResult!({ content: [{ type: "text", text: "line 1\nline 2" }] }, { expanded: false }, createTheme()));
+	// The resolver's renderers take precedence over the registered tool's own
+	// renderers: Pi consults resolvers before falling back to the tool.
+	const callText = renderToText(renderers?.renderCall?.({ tool: "read_file", server: "filesystem" }, createTheme()));
+	const resultText = renderToText(
+		renderers?.renderResult?.({ content: [{ type: "text", text: "line 1\nline 2" }] }, { expanded: false }, createTheme()),
+	);
 
 	assert.equal(callText, "MCP call filesystem:read_file (2 args)");
 	assert.equal(resultText, "↳ 2 lines returned • Ctrl+O to expand");
 });
 
-// ─── Prompt Metadata ─────────────────────────────────────────────────────────
-
-test("MCP proxy tool gets promptSnippet and promptGuidelines", async () => {
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		description: "Unified MCP gateway.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([mcpTool]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
-
-	assert.equal(
-		mcpTool.promptSnippet,
-		"Discover, inspect, and call MCP tools across configured servers",
-	);
-	assert.deepEqual(mcpTool.promptGuidelines, [
-		"Use mcp for MCP discovery first: search by capability, describe one exact tool, then call it.",
-	]);
-});
-
-test("non-proxy MCP tool gets promptSnippet from its description", async () => {
-	// Tool description must contain "mcp" as a whole word for isMcpToolCandidate to match
-	const mcpTool: RuntimeTool = {
-		name: "web_search",
-		description: "Search the web for current information using an MCP tool.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub([mcpTool]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
-
-	assert.match(mcpTool.promptSnippet ?? "", /Search the web/);
-	assert.equal(mcpTool.promptGuidelines, undefined);
-});
-
 // ─── Config Controls ─────────────────────────────────────────────────────────
 
-test("MCP decoration is independent of registerToolOverrides config", async () => {
-	// MCP decoration happens regardless of registerToolOverrides settings
+test("MCP resolution is independent of registerToolOverrides config", () => {
+	// MCP resolution happens regardless of registerToolOverrides settings
 	const config = buildConfig({
 		registerToolOverrides: {
 			read: false,
@@ -447,52 +328,37 @@ test("MCP decoration is independent of registerToolOverrides config", async () =
 			write: false,
 		},
 	});
-	const mcpTool: RuntimeTool = {
-		name: "mcp",
-		description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
-		parameters: {},
-		execute: () => {},
-	};
-	const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+	const stub = createExtensionApiStub([
+		{
+			name: "mcp",
+			description: "Unified MCP gateway for status, discovery, reconnects, and proxy tool calls.",
+			parameters: {},
+			execute: () => {},
+		},
+	]);
 
-	registerToolDisplayOverrides(api, () => config);
-	await runLifecycle(eventHandlers);
+	registerToolDisplayOverrides(stub.api, () => config);
 
-	assert.equal(typeof mcpTool.renderCall, "function", "MCP decoration should work even with all built-in overrides disabled");
+	const renderers = claimRenderers(stub, "mcp");
+	assert.equal(typeof renderers?.renderCall, "function", "MCP claimed even with all built-ins disabled");
 });
 
-// ─── Multiple MCP Tools ──────────────────────────────────────────────────────
-
-test("multiple non-proxy MCP tools each get independent decorations", async () => {
-	const tools: RuntimeTool[] = [
-		{ name: "filesystem_list", description: "List files via MCP.", parameters: {}, execute: () => {} },
-		{ name: "db_query", description: "Query database via MCP.", parameters: {}, execute: () => {} },
-		{ name: "web_search", description: "Search via MCP.", parameters: {}, execute: () => {} },
-	];
-	const { api, runtimeTools, eventHandlers } = createExtensionApiStub(tools);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await runLifecycle(eventHandlers);
-
-	for (const tool of tools) {
-		assert.equal(typeof tool.renderCall, "function", `${tool.name} should have renderCall`);
-		assert.equal(typeof tool.renderResult, "function", `${tool.name} should have renderResult`);
-	}
-});
-
-// ─── Edge: getAllTools Throws ────────────────────────────────────────────────
-
-test("registerMcpToolOverrides handles getAllTools throwing gracefully", async () => {
-	const { api, registeredTools, eventHandlers } = createExtensionApiStub([]);
-
-	// Override getAllTools to throw
-	(api as { getAllTools: () => unknown[] }).getAllTools = () => {
-		throw new Error("getAllTools failed");
-	};
+test("getAllTools failures fall back to name-shape heuristics", () => {
+	const resolvers: ResolverFn[] = [];
+	const api = {
+		on(_event: string, _handler: (...args: unknown[]) => unknown): void {},
+		registerToolRenderer(resolver: ResolverFn): void {
+			resolvers.push(resolver);
+		},
+		getAllTools(): RuntimeTool[] {
+			throw new Error("getAllTools failed");
+		},
+	} as unknown as ExtensionAPI;
 
 	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	// Should not throw during lifecycle
-	await runLifecycle(eventHandlers);
-	assert.ok(true, "should not throw when getAllTools fails");
+	const renderers = resolvers[0]("mcp", () => undefined) as { renderCall?: unknown };
+	assert.equal(typeof renderers?.renderCall, "function", "name heuristic still claims the proxy");
+	const sentinel = Symbol("next");
+	assert.equal(resolvers[0]("unrelated_tool", () => sentinel), sentinel);
 });

@@ -1,277 +1,252 @@
 import assert from "node:assert/strict";
+import { Box } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-	createBashTool,
-	createEditTool,
-	createFindTool,
-	createGrepTool,
-	createLsTool,
-	createReadTool,
-	createWriteTool,
-	type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerToolDisplayOverrides } from "../src/tool-overrides.ts";
 import { DEFAULT_TOOL_DISPLAY_CONFIG } from "../src/types.ts";
 
 const TOOL_DISPLAY_PENDING_DECORATIONS_KEY = Symbol.for("pi-tool-display.pendingDecorations.v1");
 
-interface RegisteredToolLike {
-	name: string;
-	description: string;
-	parameters: unknown;
-	renderShell?: "default" | "self";
-	promptSnippet?: string;
-	promptGuidelines?: string[];
-	renderCall?: (...args: unknown[]) => unknown;
-	renderResult?: (...args: unknown[]) => unknown;
+type ResolverFn = (toolName: string, next: () => unknown) => unknown;
+
+const THEME = {
+	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+const BUILT_INS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+
+function createExtensionApiStub(): {
+	api: ExtensionAPI;
+	resolvers: ResolverFn[];
+	eventHandlers: Record<string, (...args: unknown[]) => unknown>;
+} {
+	// Deliberately no registerTool: the resolver architecture must never
+	// re-register tools to install renderers.
+	const resolvers: ResolverFn[] = [];
+	const eventHandlers: Record<string, (...args: unknown[]) => unknown> = {};
+	const api = {
+		on(event: string, handler: (...args: unknown[]) => unknown): void {
+			eventHandlers[event] = handler;
+		},
+		registerToolRenderer(resolver: ResolverFn): void {
+			resolvers.push(resolver);
+		},
+	} as unknown as ExtensionAPI;
+	return { api, resolvers, eventHandlers };
 }
 
-interface ToolEventHandlers {
-	session_start?: () => Promise<void> | void;
-	before_agent_start?: () => Promise<void> | void;
+function resolveFromStubs(resolvers: ResolverFn[], toolName: string): unknown {
+	assert.ok(resolvers.length > 0, "expected a registerToolRenderer resolver to be installed");
+	return resolvers[resolvers.length - 1](toolName, () => undefined);
 }
 
-interface ExecutableToolLike extends RegisteredToolLike {
-	execute: (...args: unknown[]) => Promise<{ content?: Array<{ type: string; text?: string }> }>;
+function renderComponentLines(component: unknown, width = 80): string[] {
+	const box = new Box(1, 1);
+	box.addChild(component as never);
+	return box.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 }
 
-async function withTempDir(name: string, run: (dir: string) => Promise<void> | void): Promise<void> {
-	const dir = mkdtempSync(join(tmpdir(), name));
+function stringifyComponent(component: unknown): string {
+	return renderComponentLines(component).join("\n");
+}
+
+test("resolver claims every enabled built-in renderer at load time, without lifecycle events", () => {
+	const { api, resolvers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+	for (const name of BUILT_INS) {
+		const renderers = resolveFromStubs(resolvers, name) as { renderCall?: unknown; renderResult?: unknown };
+		assert.equal(typeof renderers?.renderCall, "function", `${name} renderCall resolved`);
+		assert.equal(typeof renderers?.renderResult, "function", `${name} renderResult resolved`);
+	}
+});
+
+test("edit claim carries renderShell default so tool backgrounds fill the row", () => {
+	const { api, resolvers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+	const renderers = resolveFromStubs(resolvers, "edit") as { renderShell?: unknown };
+	assert.equal(renderers.renderShell, "default");
+});
+
+test("disabled built-ins fall through to the next resolver", () => {
+	const { api, resolvers } = createExtensionApiStub();
+	const config = {
+		...DEFAULT_TOOL_DISPLAY_CONFIG,
+		registerToolOverrides: {
+			...DEFAULT_TOOL_DISPLAY_CONFIG.registerToolOverrides,
+			read: false,
+			bash: false,
+		},
+	};
+	registerToolDisplayOverrides(api, () => config);
+
+	const sentinel = Symbol("next");
+	assert.equal(resolvers[0]("read", () => sentinel), sentinel, "disabled read passes through");
+	assert.equal(resolvers[0]("bash", () => sentinel), sentinel, "disabled bash passes through");
+	assert.notEqual(resolvers[0]("grep", () => sentinel), sentinel, "enabled grep is claimed");
+});
+
+test("unknown tools pass through while MCP-named tools are claimed without any discovery sweep", () => {
+	const { api, resolvers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+	const sentinel = Symbol("next");
+	assert.equal(resolvers[0]("random-custom-tool", () => sentinel), sentinel, "unrelated tool passes through");
+
+	const mcpRenderers = resolveFromStubs(resolvers, "mcp") as { renderCall?: unknown; renderResult?: unknown };
+	assert.equal(typeof mcpRenderers?.renderCall, "function", "mcp proxy claimed");
+	assert.equal(typeof mcpRenderers?.renderResult, "function", "mcp proxy result claimed");
+});
+
+test("rendering claims are config-driven and need no getAllTools ownership discovery", () => {
+	const { api, resolvers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+	const renderers = resolveFromStubs(resolvers, "read") as { renderCall?: unknown };
+	assert.equal(typeof renderers?.renderCall, "function", "read claimed without tool ownership data");
+});
+
+test("rendering claims preserve native tool objects", () => {
+	const { api } = createExtensionApiStub();
+	// The stub has no registerTool: if the extension tried to re-register the
+	// built-ins, this call would throw and fail the test.
+	assert.doesNotThrow(() => registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG));
+});
+
+test("tool_call captures pre-write content so the write renderer shows a real diff", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "ptd-write-capture-"));
 	try {
-		await run(dir);
+		const filePath = join(dir, "notes.txt");
+		writeFileSync(filePath, "old content\n", "utf8");
+
+		const { api, resolvers, eventHandlers } = createExtensionApiStub();
+		registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+		const handler = eventHandlers.tool_call;
+		assert.ok(handler, "tool_call handler registered for pre-write capture");
+		await handler(
+			{ toolName: "write", input: { path: filePath }, toolCallId: "call-1" },
+			{ cwd: dir },
+		);
+
+		// Overwrite the file on disk; only the captured metadata can know the
+		// pre-write content at render time.
+		writeFileSync(filePath, "new content\n", "utf8");
+
+		const renderers = resolveFromStubs(resolvers, "write") as {
+			renderResult: (result: unknown, options: unknown, theme: unknown, context: unknown) => unknown;
+		};
+		const output = stringifyComponent(
+			renderers.renderResult(
+				{ content: [{ type: "text", text: "ok" }] },
+				{ expanded: true, isPartial: false },
+				THEME,
+				{
+					args: { path: filePath, content: "new content\n" },
+					toolCallId: "call-1",
+					cwd: dir,
+					isError: false,
+					isPartial: false,
+					argsComplete: true,
+				},
+			),
+		);
+		assert.match(output, /old content/, "captured previous content appears in the diff");
+
+		// A different tool call id has no capture and must not inherit it.
+		const otherOutput = stringifyComponent(
+			renderers.renderResult(
+				{ content: [{ type: "text", text: "ok" }] },
+				{ expanded: true, isPartial: false },
+				THEME,
+				{
+					args: { path: filePath, content: "new content\n" },
+					toolCallId: "call-2",
+					cwd: dir,
+					isError: false,
+					isPartial: false,
+					argsComplete: true,
+				},
+			),
+		);
+		assert.doesNotMatch(otherOutput, /old content/, "capture is scoped to its tool call id");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-}
-
-function getTextOutput(result: { content?: Array<{ type: string; text?: string }> }): string {
-	return (result.content ?? [])
-		.filter((entry) => entry.type === "text")
-		.map((entry) => entry.text ?? "")
-		.join("");
-}
-
-function withDefaultReadEditOwners(tools: unknown[] = []): unknown[] {
-	const names = new Set(
-		tools
-			.map((tool) => (tool as { name?: unknown }).name)
-			.filter((name): name is string => typeof name === "string"),
-	);
-	const defaults = ["read", "edit"]
-		.filter((name) => !names.has(name))
-		.map((name) => ({ name, sourceInfo: { source: "builtin", path: `<builtin:${name}>` } }));
-	return [...defaults, ...tools];
-}
-
-function createExtensionApiStub(allTools: unknown[] = []): {
-	api: ExtensionAPI;
-	registeredTools: RegisteredToolLike[];
-	eventHandlers: ToolEventHandlers;
-} {
-	const registeredTools: RegisteredToolLike[] = [];
-	const eventHandlers: ToolEventHandlers = {};
-	const api = {
-		registerTool(tool: RegisteredToolLike): void {
-			registeredTools.push(tool);
-		},
-		on(event: keyof ToolEventHandlers, handler: () => Promise<void> | void): void {
-			eventHandlers[event] = handler;
-		},
-		getAllTools(): unknown[] {
-			return withDefaultReadEditOwners(allTools);
-		},
-	} as unknown as ExtensionAPI;
-
-	return { api, registeredTools, eventHandlers };
-}
-
-test("registerToolDisplayOverrides copies built-in prompt metadata onto overridden tools", async () => {
-	const { api, registeredTools, eventHandlers } = createExtensionApiStub();
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	assert.deepEqual(
-		registeredTools.map((tool) => tool.name).sort(),
-		["bash", "edit", "find", "grep", "ls", "read", "write"],
-	);
-	await eventHandlers.before_agent_start?.();
-
-	assert.equal(registeredTools.length, 7);
-
-	const byName = new Map(registeredTools.map((tool) => [tool.name, tool]));
-	const cwd = process.cwd();
-	const builtInTools = {
-		read: createReadTool(cwd),
-		grep: createGrepTool(cwd),
-		find: createFindTool(cwd),
-		ls: createLsTool(cwd),
-		bash: createBashTool(cwd),
-		edit: createEditTool(cwd),
-		write: createWriteTool(cwd),
-	};
-
-	for (const [name, builtInTool] of Object.entries(builtInTools)) {
-		const registeredTool = byName.get(name);
-		const builtInMetadata = builtInTool as unknown as RegisteredToolLike;
-		assert.ok(registeredTool, `expected '${name}' to be registered`);
-		assert.equal(registeredTool.promptSnippet, builtInMetadata.promptSnippet);
-	}
-
-	// The override copies whatever the built-in owner declares, so compare per
-	// tool instead of hardcoding which tools ship guidelines in this Pi version.
-	for (const [name, builtInTool] of Object.entries(builtInTools)) {
-		assert.deepEqual(
-			byName.get(name)?.promptGuidelines,
-			(builtInTool as unknown as RegisteredToolLike).promptGuidelines,
-			`${name} promptGuidelines match the built-in owner`,
-		);
-	}
 });
 
-test("registerToolDisplayOverrides registers built-in display renderers during extension load for pre-bind history rendering", () => {
-	const { api, registeredTools } = createExtensionApiStub();
-
+test("non-write tool_call events do not capture anything", async () => {
+	const { api, resolvers, eventHandlers } = createExtensionApiStub();
 	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	const byName = new Map(registeredTools.map((tool) => [tool.name, tool]));
-	for (const name of ["read", "grep", "find", "ls", "bash", "edit", "write"] as const) {
-		const registeredTool = byName.get(name);
-		assert.ok(registeredTool, `expected '${name}' to be available before session_start`);
-		assert.equal(typeof registeredTool.renderCall, "function", `${name} has renderCall before session_start`);
-		assert.equal(typeof registeredTool.renderResult, "function", `${name} has renderResult before session_start`);
-	}
-});
-
-test("registerToolDisplayOverrides clones built-in parameter schemas so Pi TUI keeps extension renderers active", async () => {
-	const { api, registeredTools, eventHandlers } = createExtensionApiStub();
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await eventHandlers.before_agent_start?.();
-
-	const byName = new Map(registeredTools.map((tool) => [tool.name, tool]));
-	const cwd = process.cwd();
-	const builtInTools = {
-		read: createReadTool(cwd),
-		grep: createGrepTool(cwd),
-		find: createFindTool(cwd),
-		ls: createLsTool(cwd),
-		bash: createBashTool(cwd),
-		edit: createEditTool(cwd),
-		write: createWriteTool(cwd),
-	};
-
-	for (const [name, builtInTool] of Object.entries(builtInTools)) {
-		const registeredTool = byName.get(name);
-		assert.ok(registeredTool, `expected '${name}' to be registered`);
-		assert.notEqual(
-			registeredTool.parameters,
-			builtInTool.parameters,
-			`expected '${name}' to use a cloned parameter object`,
-		);
-		assert.deepEqual(registeredTool.parameters, builtInTool.parameters);
-	}
-});
-
-test("registerToolDisplayOverrides forces edit into the default render shell so tool backgrounds fill the full row", async () => {
-	const { api, registeredTools, eventHandlers } = createExtensionApiStub();
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await eventHandlers.before_agent_start?.();
-
-	const byName = new Map(registeredTools.map((tool) => [tool.name, tool]));
-	assert.equal(byName.get("edit")?.renderShell, "default");
-});
-
-test("registerToolDisplayOverrides leaves externally owned read/edit/grep tools active", async () => {
-	const { api, registeredTools, eventHandlers } = createExtensionApiStub([
-		{ name: "read", sourceInfo: { source: "local", path: "agent/extensions/example-read/src/read.ts" } },
-		{ name: "edit", sourceInfo: { source: "local", path: "agent/extensions/example-edit/src/edit.ts" } },
-		{ name: "grep", sourceInfo: { source: "local", path: "agent/extensions/example-grep/src/grep.ts" } },
-	]);
-
-	registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-	await eventHandlers.before_agent_start?.();
-
-	const registeredNames = new Set(registeredTools.map((tool) => tool.name));
-	assert.equal(registeredNames.has("read"), false);
-	assert.equal(registeredNames.has("edit"), false);
-	assert.equal(registeredNames.has("grep"), false);
-	assert.equal(registeredNames.has("find"), true);
-	assert.equal(registeredNames.has("ls"), true);
-	assert.equal(registeredNames.has("bash"), true);
-	assert.equal(registeredNames.has("write"), true);
-});
-
-test("bash override uses shellPath from Pi settings", async () => {
-	await withTempDir("pi-tool-display-shellpath-", async (dir) => {
-		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-		process.env.PI_CODING_AGENT_DIR = dir;
-		writeFileSync(
-			join(dir, "settings.json"),
-			JSON.stringify({ shellPath: "/definitely/missing/bash" }),
-			"utf8",
-		);
-
-		try {
-			const { api, registeredTools, eventHandlers } = createExtensionApiStub();
-			registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-			await eventHandlers.before_agent_start?.();
-
-			const bashTool = registeredTools.find((tool) => tool.name === "bash") as ExecutableToolLike | undefined;
-			assert.ok(bashTool, "expected bash override to be registered");
-			await assert.rejects(
-				bashTool.execute("tool-call-1", { command: "printf test" }, undefined, undefined, { cwd: process.cwd() }),
-				/custom shell path not found/i,
-			);
-			assert.equal(bashTool.description.length > 0, true);
-		} finally {
-			if (previousAgentDir === undefined) {
-				delete process.env.PI_CODING_AGENT_DIR;
-			} else {
-				process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-			}
-		}
+	const handler = eventHandlers.tool_call;
+	assert.ok(handler);
+	await assert.doesNotReject(async () => {
+		await handler({ toolName: "read", input: { path: "/tmp/x" }, toolCallId: "r1" }, { cwd: process.cwd() });
+		await handler(undefined, undefined);
 	});
+
+	const renderers = resolveFromStubs(resolvers, "write") as {
+		renderResult: (result: unknown, options: unknown, theme: unknown, context: unknown) => unknown;
+	};
+	const output = stringifyComponent(
+		renderers.renderResult(
+			{ content: [{ type: "text", text: "ok" }] },
+			{ expanded: true, isPartial: false },
+			THEME,
+			{ args: { path: "/tmp/x", content: "text\n" }, toolCallId: "r1", isError: false, isPartial: false, argsComplete: true },
+		),
+	);
+	assert.equal(output.length > 0, true, "write rendering stays functional without capture");
 });
 
-test("bash override uses shellCommandPrefix from Pi settings", async () => {
-	await withTempDir("pi-tool-display-shellprefix-", async (dir) => {
-		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-		process.env.PI_CODING_AGENT_DIR = dir;
-		writeFileSync(
-			join(dir, "settings.json"),
-			JSON.stringify({ shellCommandPrefix: "printf 'prefix-output\\n'" }),
-			"utf8",
+test("session_start clears captured write metadata", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "ptd-write-clear-"));
+	try {
+		const filePath = join(dir, "notes.txt");
+		writeFileSync(filePath, "old content\n", "utf8");
+
+		const { api, resolvers, eventHandlers } = createExtensionApiStub();
+		registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+
+		await eventHandlers.tool_call?.(
+			{ toolName: "write", input: { path: filePath }, toolCallId: "call-1" },
+			{ cwd: dir },
 		);
+		await eventHandlers.session_start?.({}, { cwd: dir });
 
-		try {
-			const { api, registeredTools, eventHandlers } = createExtensionApiStub();
-			registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-			await eventHandlers.before_agent_start?.();
-
-			const bashTool = registeredTools.find((tool) => tool.name === "bash") as ExecutableToolLike | undefined;
-			assert.ok(bashTool, "expected bash override to be registered");
-			const result = await bashTool.execute(
-				"tool-call-2",
-				{ command: "printf 'command-output\\n'" },
-				undefined,
-				undefined,
-				{ cwd: process.cwd() },
-			);
-			assert.equal(getTextOutput(result).trim(), "prefix-output\ncommand-output");
-		} finally {
-			if (previousAgentDir === undefined) {
-				delete process.env.PI_CODING_AGENT_DIR;
-			} else {
-				process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-			}
-		}
-	});
+		writeFileSync(filePath, "new content\n", "utf8");
+		const renderers = resolveFromStubs(resolvers, "write") as {
+			renderResult: (result: unknown, options: unknown, theme: unknown, context: unknown) => unknown;
+		};
+		const output = stringifyComponent(
+			renderers.renderResult(
+				{ content: [{ type: "text", text: "ok" }] },
+				{ expanded: true, isPartial: false },
+				THEME,
+				{
+					args: { path: filePath, content: "new content\n" },
+					toolCallId: "call-1",
+					cwd: dir,
+					isError: false,
+					isPartial: false,
+					argsComplete: true,
+				},
+			),
+		);
+		assert.doesNotMatch(output, /old content/, "capture cleared after session_start");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
-test("registerToolDisplayOverrides drains pending display decorations from early-loading extensions", () => {
+test("pending display decorations register adapters for tools registered later", () => {
 	type GlobalWithPendingDecorations = typeof globalThis & {
 		[TOOL_DISPLAY_PENDING_DECORATIONS_KEY]?: Array<{
 			tool: Record<string, unknown>;
@@ -280,31 +255,23 @@ test("registerToolDisplayOverrides drains pending display decorations from early
 	};
 	const globalWithPending = globalThis as GlobalWithPendingDecorations;
 	const previousPending = globalWithPending[TOOL_DISPLAY_PENDING_DECORATIONS_KEY];
-	const queuedTool: Record<string, unknown> = {
-		name: "mcp",
-		label: "MCP Proxy",
-		description: "Unified MCP gateway.",
-		parameters: {},
-		execute(): void {
-			// No-op test stub.
-		},
-	};
 	globalWithPending[TOOL_DISPLAY_PENDING_DECORATIONS_KEY] = [
 		{
 			adapter: { kind: "mcp" },
-			tool: queuedTool,
+			tool: { name: "queued-ext-tool", label: "Queued Extension Tool" },
 		},
 	];
 
 	try {
-		const { api, registeredTools } = createExtensionApiStub();
-
+		const { api, resolvers } = createExtensionApiStub();
 		registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-		assert.equal(registeredTools.some((tool) => tool.name === "mcp"), false);
-		assert.equal(typeof queuedTool.renderCall, "function", "expected queued MCP tool to receive renderCall");
-		assert.equal(typeof queuedTool.renderResult, "function", "expected queued MCP tool to receive renderResult");
-		assert.equal(globalWithPending[TOOL_DISPLAY_PENDING_DECORATIONS_KEY]?.length, 0);
+		assert.equal(globalWithPending[TOOL_DISPLAY_PENDING_DECORATIONS_KEY]?.length, 0, "queue drained");
+
+		// The queued tool's name is not MCP-shaped, so only the registered
+		// adapter can explain why it is claimed.
+		const renderers = resolveFromStubs(resolvers, "queued-ext-tool") as { renderCall?: unknown };
+		assert.equal(typeof renderers?.renderCall, "function", "queued adapter claims its tool");
 	} finally {
 		if (previousPending) {
 			globalWithPending[TOOL_DISPLAY_PENDING_DECORATIONS_KEY] = previousPending;

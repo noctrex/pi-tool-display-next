@@ -51,16 +51,19 @@ function createApiStub(
     on: (event: string, handler: (...args: unknown[]) => unknown) => void;
     getAllTools: () => unknown[];
     getCommands: () => Array<{ name: string }>;
+    registerToolRenderer: (resolver: (toolName: string, next: () => unknown) => unknown) => void;
   }> = {},
 ): {
   api: ExtensionAPI;
   capturedTools: ToolLike[];
   capturedCommands: CapturedCommand[];
   capturedHandlers: CapturedHandler[];
+  capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown>;
 } {
   const capturedTools: ToolLike[] = [];
   const capturedCommands: CapturedCommand[] = [];
   const capturedHandlers: CapturedHandler[] = [];
+  const capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown> = [];
 
   const api = {
     registerTool(tool: unknown): void {
@@ -75,6 +78,10 @@ function createApiStub(
       capturedHandlers.push({ event, handler });
       overrides.on?.(event, handler);
     },
+    registerToolRenderer(resolver: (toolName: string, next: () => unknown) => unknown): void {
+      capturedResolvers.push(resolver);
+      overrides.registerToolRenderer?.(resolver);
+    },
     getAllTools(): unknown[] {
       return overrides.getAllTools?.() ?? [];
     },
@@ -83,7 +90,7 @@ function createApiStub(
     },
   } as unknown as ExtensionAPI;
 
-  return { api, capturedTools, capturedCommands, capturedHandlers };
+  return { api, capturedTools, capturedCommands, capturedHandlers, capturedResolvers };
 }
 
 /**
@@ -93,23 +100,28 @@ function createApiStub(
 function createExtensionApiStub(allTools: unknown[] = []): {
   api: ExtensionAPI;
   registeredTools: ToolLike[];
-  eventHandlers: Record<string, () => Promise<void> | void>;
+  capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown>;
+  eventHandlers: Record<string, (...args: unknown[]) => unknown>;
 } {
   const registeredTools: ToolLike[] = [];
-  const eventHandlers: Record<string, () => Promise<void> | void> = {};
+  const capturedResolvers: Array<(toolName: string, next: () => unknown) => unknown> = [];
+  const eventHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const api = {
     registerTool(tool: ToolLike): void {
       registeredTools.push(tool);
     },
-    on(event: string, handler: () => Promise<void> | void): void {
+    on(event: string, handler: (...args: unknown[]) => unknown): void {
       eventHandlers[event] = handler;
+    },
+    registerToolRenderer(resolver: (toolName: string, next: () => unknown) => unknown): void {
+      capturedResolvers.push(resolver);
     },
     getAllTools(): unknown[] {
       return allTools;
     },
   } as unknown as ExtensionAPI;
 
-  return { api, registeredTools, eventHandlers };
+  return { api, registeredTools, capturedResolvers, eventHandlers };
 }
 
 /** Minimal theme stub for render calls. */
@@ -146,43 +158,27 @@ test("1: after reload, new lifecycle handlers are registered", () => {
 // 2. Tool override restoration
 // ---------------------------------------------------------------------------
 
-test("2: built-in tool overrides are re-registered on reload", () => {
-  const { api, capturedTools } = createApiStub();
+test("2: built-in renderer resolvers are installed per extension runtime", () => {
+  const { api, capturedResolvers } = createApiStub();
 
   // First call
   toolDisplayExtension(api);
-  const firstTools = capturedTools.map((t) => t.name);
-  assert.ok(firstTools.includes("find"), "find registered on first call");
+  assert.ok(capturedResolvers.length >= 1, "resolver installed on first call");
+  const firstResolver = capturedResolvers[0];
+  const resolved = firstResolver("find", () => undefined) as { renderCall?: unknown };
+  assert.equal(typeof resolved?.renderCall, "function", "find claimed by first resolver");
 
-  // Simulate reload
-  const countBeforeReload = capturedTools.length;
+  // Simulate reload: a new extension runtime installs its own resolver.
   toolDisplayExtension(api);
-  const countAfterReload = capturedTools.length;
-
-  // Each call to registerToolDisplayOverrides registers the same built-in
-  // tools again (find, ls, write immediately; read/grep/edit/bash deferred).
   assert.ok(
-    countAfterReload >= countBeforeReload + 3,
-    "at least 3 tools re-registered on reload",
+    capturedResolvers.length >= 2,
+    "a fresh resolver is installed after reload",
   );
-
-  // Verify tool names appear multiple times, meaning they were re-registered
-  const toolNameCounts = new Map<string, number>();
-  for (const tool of capturedTools) {
-    toolNameCounts.set(tool.name, (toolNameCounts.get(tool.name) ?? 0) + 1);
+  const secondResolver = capturedResolvers[capturedResolvers.length - 1];
+  for (const name of ["find", "ls", "write", "read", "grep", "bash", "edit"]) {
+    const renderers = secondResolver(name, () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", `${name} claimed after reload`);
   }
-  assert.ok(
-    (toolNameCounts.get("find") ?? 0) >= 2,
-    "find is registered at least twice (two calls)",
-  );
-  assert.ok(
-    (toolNameCounts.get("ls") ?? 0) >= 2,
-    "ls is registered at least twice (two calls)",
-  );
-  assert.ok(
-    (toolNameCounts.get("write") ?? 0) >= 2,
-    "write is registered at least twice (two calls)",
-  );
 });
 
 test("2: re-registered tools have renderCall and renderResult functions after reload", () => {
@@ -213,31 +209,33 @@ test("2: re-registered tools have renderCall and renderResult functions after re
   }
 });
 
-test("2: built-in tool overrides register before lifecycle events and re-register on reload", async () => {
-  const { api, registeredTools, eventHandlers } = createExtensionApiStub();
+test("2: built-in renderers are available before lifecycle events and stay available after reload", async () => {
+  const { api, capturedResolvers, eventHandlers } = createExtensionApiStub();
 
   registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  const firstImmediate = registeredTools.map((t) => t.name);
 
+  // Claims work immediately at load time, no lifecycle required.
+  const firstResolver = capturedResolvers[0];
   for (const toolName of ["read", "edit", "grep", "bash"] as const) {
-    assert.ok(firstImmediate.includes(toolName), `${toolName} registered before lifecycle events`);
+    const renderers = firstResolver(toolName, () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", `${toolName} claimed before lifecycle events`);
   }
 
-  const countBeforeLifecycle = registeredTools.length;
+  // Lifecycle events add no extra registrations; resolution stays by name.
   await eventHandlers.before_agent_start?.();
   assert.equal(
-    registeredTools.length,
-    countBeforeLifecycle,
-    "before_agent_start does not duplicate already registered built-ins",
+    capturedResolvers.length,
+    1,
+    "before_agent_start does not install extra resolvers",
   );
 
+  // Reload installs a fresh resolver that claims the same built-ins.
   registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  const countAfterReload = registeredTools.length;
-
-  assert.ok(
-    countAfterReload >= countBeforeLifecycle + 7,
-    "built-in display overrides re-register during reload initialization",
-  );
+  const reloadResolver = capturedResolvers[capturedResolvers.length - 1];
+  for (const toolName of ["read", "grep", "find", "ls", "bash", "edit", "write"] as const) {
+    const renderers = reloadResolver(toolName, () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", `${toolName} claimed after reload`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -370,7 +368,7 @@ test("3: multiple consecutive bash render calls do not create duplicate timers",
 // 4. MCP override cleanup
 // ---------------------------------------------------------------------------
 
-test("4: MCP tools are decorated on first registration (via session_start event)", () => {
+test("4: MCP tools resolve renderers from the start, no session_start sweep needed", () => {
   // isMcpToolCandidate checks for name==="mcp" or description matching \bmcp\b
   const mcpTool: Record<string, unknown> = {
     name: "weather",
@@ -379,41 +377,23 @@ test("4: MCP tools are decorated on first registration (via session_start event)
     execute: () => "sunny",
   };
 
-  const { api, eventHandlers } = createExtensionApiStub([mcpTool]);
+  const { api, capturedResolvers } = createExtensionApiStub([mcpTool]);
 
-  assert.equal(
-    typeof mcpTool.renderCall,
-    "undefined",
-    "MCP tool has no renderCall before registration",
-  );
+  // The tool object stays untouched: rendering flows through the resolver.
+  assert.equal(mcpTool.renderCall, undefined, "tool object is never decorated");
 
-  // registerToolDisplayOverrides registers session_start handler;
-  // MCP tool decoration happens inside that handler
   registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-  // MCP tools not decorated yet (deferred to session_start)
-  assert.equal(
-    typeof mcpTool.renderCall,
-    "undefined",
-    "MCP tool not decorated until session_start fires",
-  );
-
-  // Trigger the session_start event
-  if (eventHandlers.session_start) {
-    eventHandlers.session_start();
-  }
-
-  assert.ok(
-    typeof mcpTool.renderCall === "function",
-    "MCP tool receives renderCall after session_start",
-  );
-  assert.ok(
-    typeof mcpTool.renderResult === "function",
-    "MCP tool receives renderResult after session_start",
-  );
+  const resolved = capturedResolvers[0]("weather", () => undefined) as {
+    renderCall?: unknown;
+    renderResult?: unknown;
+  };
+  assert.equal(typeof resolved?.renderCall, "function", "MCP tool resolves renderCall at load time");
+  assert.equal(typeof resolved?.renderResult, "function", "MCP tool resolves renderResult at load time");
+  assert.equal(mcpTool.renderCall, undefined, "tool object still untouched after resolution");
 });
 
-test("4: MCP tools get re-decorated on reload (new wrappedMcpToolNames set)", () => {
+test("4: fresh resolvers after reload resolve MCP renderers independently", () => {
   // isMcpToolCandidate checks for name==="mcp" or description matching \bmcp\b
   const mcpTool: Record<string, unknown> = {
     name: "weather",
@@ -422,28 +402,23 @@ test("4: MCP tools get re-decorated on reload (new wrappedMcpToolNames set)", ()
     execute: () => "sunny",
   };
 
-  // First call: create a stub and trigger session_start
-  const { api: api1, eventHandlers: handlers1 } = createExtensionApiStub([mcpTool]);
-  registerToolDisplayOverrides(api1, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  handlers1.session_start?.();
+  // First runtime
+  const first = createExtensionApiStub([mcpTool]);
+  registerToolDisplayOverrides(first.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+  const firstResolved = first.capturedResolvers[0]("weather", () => undefined) as { renderCall?: unknown };
+  assert.equal(typeof firstResolved?.renderCall, "function", "claimed by first runtime resolver");
 
-  assert.ok(
-    typeof mcpTool.renderCall === "function",
-    "MCP tool receives renderCall after first registration + session_start",
+  // Reload: a NEW runtime installs a fresh resolver
+  const second = createExtensionApiStub([mcpTool]);
+  registerToolDisplayOverrides(second.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+  const secondResolved = second.capturedResolvers[0]("weather", () => undefined) as { renderCall?: unknown };
+  assert.equal(
+    typeof secondResolved?.renderCall,
+    "function",
+    "claimed by the reload runtime resolver",
   );
-  const firstRenderCall = mcpTool.renderCall;
-
-  // Reload: create a NEW stub (new getAllTools result) and trigger session_start
-  const { api: api2, eventHandlers: handlers2 } = createExtensionApiStub([mcpTool]);
-  registerToolDisplayOverrides(api2, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  handlers2.session_start?.();
-
-  const secondRenderCall = mcpTool.renderCall;
-
-  assert.ok(
-    typeof secondRenderCall === "function",
-    "MCP tool has renderCall after reload",
-  );
+  // The tool object remains untouched across runtimes.
+  assert.equal(mcpTool.renderCall, undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -713,43 +688,28 @@ test("8: session_start handler can be invoked after reload without errors", asyn
 // ---------------------------------------------------------------------------
 
 test("9: calling toolDisplayExtension three times (double reload) is safe", () => {
-  const { api, capturedTools, capturedCommands } = createApiStub();
+  const { api, capturedCommands, capturedResolvers } = createApiStub();
 
   // First call
   toolDisplayExtension(api);
-  const afterFirst = { tools: capturedTools.length, cmds: capturedCommands.length };
+  const afterFirst = { resolvers: capturedResolvers.length, cmds: capturedCommands.length };
 
   // First reload
   toolDisplayExtension(api);
-  const afterSecond = { tools: capturedTools.length, cmds: capturedCommands.length };
+  const afterSecond = { resolvers: capturedResolvers.length, cmds: capturedCommands.length };
 
   // Second reload (double reload)
   assert.doesNotThrow(() => toolDisplayExtension(api));
-  const afterThird = { tools: capturedTools.length, cmds: capturedCommands.length };
+  const afterThird = { resolvers: capturedResolvers.length, cmds: capturedCommands.length };
 
-  // Each call adds more registrations (no deduplication in the stub)
-  assert.ok(afterThird.tools > afterSecond.tools, "tools registered on third call");
+  // Each call installs its own renderer resolver and command registration.
+  assert.ok(afterThird.resolvers > afterSecond.resolvers, "resolver installed on third call");
   assert.ok(afterThird.cmds > afterSecond.cmds, "commands registered on third call");
 
-  // Verify all tool registrations have renderCall/renderResult
-  for (const tool of capturedTools) {
-    if (tool.name === "read" || tool.name === "edit" || tool.name === "grep") {
-      continue; // Deferred tools
-    }
-    if (tool.renderCall !== undefined) {
-      assert.equal(
-        typeof tool.renderCall,
-        "function",
-        `${tool.name} renderCall is a function`,
-      );
-    }
-    if (tool.renderResult !== undefined) {
-      assert.equal(
-        typeof tool.renderResult,
-        "function",
-        `${tool.name} renderResult is a function`,
-      );
-    }
+  // Every installed resolver claims the built-in tools.
+  for (const resolver of capturedResolvers) {
+    const renderers = resolver("read", () => undefined) as { renderCall?: unknown };
+    assert.equal(typeof renderers?.renderCall, "function", "read claimed by each runtime resolver");
   }
 });
 
@@ -887,13 +847,9 @@ test("10: active bash spinner timer is cleaned up when execution transitions fro
 // 11. State isolation between reloads
 // ---------------------------------------------------------------------------
 
-test("11: registerToolDisplayOverrides creates fresh state on each call", () => {
-  // Each call to registerToolDisplayOverrides creates new:
-  // - builtInToolCache (cleared)
-  // - registeredBuiltInToolOverrides Set
-  // - deferredBuiltInToolOverrides Map
-  // - wrappedMcpToolNames Set
-  // - ToolDisplayApi on globalThis
+test("11: registerToolDisplayOverrides creates fresh resolver state on each call", () => {
+  // Each call installs a fresh resolver with its own renderer map, MCP
+  // candidate cache, and write-capture state.
 
   const mcpTool: Record<string, unknown> = {
     name: "server-tool",
@@ -905,30 +861,29 @@ test("11: registerToolDisplayOverrides creates fresh state on each call", () => 
   // First call with MCP tool
   const stub1 = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(stub1.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  // Trigger session_start to invoke registerMcpToolOverrides
-  stub1.eventHandlers.session_start?.();
 
-  assert.ok(
-    typeof mcpTool.renderCall === "function",
-    "MCP tool decorated in first registration",
+  const firstResolved = stub1.capturedResolvers[0]("server-tool", () => undefined) as {
+    renderCall?: unknown;
+  };
+  assert.equal(
+    typeof firstResolved?.renderCall === "function",
+    true,
+    "MCP tool claimed by the first resolver",
   );
 
-  const firstDeco = mcpTool.renderCall;
-
-  // Second call - fresh wrappedMcpToolNames set means re-decoration
+  // Second call - a fresh resolver claims the same tool independently
   const stub2 = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(stub2.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  stub2.eventHandlers.session_start?.();
 
-  // The MCP tool is the same object, so it should have been re-decorated
-  // Even though the first call already decorated it, the second call's new
-  // wrappedMcpToolNames set doesn't know about it.
-  // The decoration may produce the same function or a new one; either is fine
-  // as long as renderCall is still a function.
+  const secondResolved = stub2.capturedResolvers[0]("server-tool", () => undefined) as {
+    renderCall?: unknown;
+  };
   assert.ok(
-    typeof mcpTool.renderCall === "function",
-    "MCP tool still has renderCall after second registration",
+    typeof secondResolved?.renderCall === "function",
+    "MCP tool claimed by the second resolver",
   );
+  // The shared tool object is never mutated by either resolver.
+  assert.equal(mcpTool.renderCall, undefined);
 });
 
 test("11: each tool override call clones parameters independently", () => {
