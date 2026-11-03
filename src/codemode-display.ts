@@ -1,5 +1,5 @@
 import { keyHint } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, type Component, type Keybinding } from "@earendil-works/pi-tui";
 import { isRecord } from "./tool-metadata.js";
 import { compactOutputLines, extractTextOutput, pluralize, previewLines, sanitizeAnsiForThemedOutput, splitLines } from "./render-utils.js";
 import type { ToolDisplayConfig } from "./types.js";
@@ -40,6 +40,12 @@ interface CodemodeRenderOptions {
 interface CodemodeRenderContext {
 	isError?: boolean;
 	expanded?: boolean;
+	/**
+	 * Keybinding formatter injected through pi's render context (KeybindingHints).
+	 * The package import cannot see the host keybindings when the extension resolves
+	 * its own package copy, so the injected formatter is preferred when present.
+	 */
+	keyHint?: (keybinding: Keybinding, description: string) => string;
 }
 
 type ThemeLike = {
@@ -52,6 +58,7 @@ function renderSummary(
 	options: CodemodeRenderOptions,
 	theme: ThemeLike,
 	isError: boolean,
+	formatKeyHint: (keybinding: Keybinding, description: string) => string = keyHint,
 ): Text {
 	const total = counts.running + counts.ok + counts.error + counts.cancelled;
 	const status = options.isPartial ? "running" : isError ? "failed" : "completed";
@@ -60,7 +67,7 @@ function renderSummary(
 	if (counts.cancelled) summary.push(`${counts.cancelled} cancelled`);
 	const color = isError || counts.error ? "error" : "muted";
 	return new Text(
-		theme.fg(color, `↳ ${summary.join(" · ")}`) + " • " + keyHint("app.tools.expand", "to expand"),
+		theme.fg(color, `↳ ${summary.join(" · ")}`) + " • " + formatKeyHint("app.tools.expand", "to expand"),
 		0, 0,
 	);
 }
@@ -151,7 +158,7 @@ export function codemodeRenderers(
 				return next.renderResult?.(result, options, theme, nativeContext);
 			}
 
-			const summary = renderSummary(counts, options, theme, context?.isError === true);
+			const summary = renderSummary(counts, options, theme, context?.isError === true, context?.keyHint);
 			const config = getConfig();
 			if (config.codemodeOutputMode === "summary") return summary;
 			const container = new Container();

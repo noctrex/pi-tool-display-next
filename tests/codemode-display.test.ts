@@ -154,3 +154,15 @@ test("codemodeOutputMode normalization is tolerant and defaults to calls", () =>
 	assert.equal(normalizeToolDisplayConfig({ codemodeOutputMode: "preview" }).codemodeOutputMode, "preview");
 	assert.equal(normalizeToolDisplayConfig({ codemodeOutputMode: "bogus" }).codemodeOutputMode, "calls");
 });
+
+test("summary prefers the keybinding hint injected through the render context", () => {
+	const renderers = renderersFor({ codemodeOutputMode: "summary" });
+	const text = toText(renderers.renderResult(
+		result(["ok"]),
+		{ isPartial: false, expanded: false },
+		THEME,
+		{ isError: false, keyHint: (keybinding, description) => `[${keybinding}:${description}]` },
+	));
+
+	assert.match(text, /\[app\.tools\.expand:to expand\]/);
+});
