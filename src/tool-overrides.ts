@@ -11,6 +11,7 @@ import type {
 import { formatSize } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { renderBashCall } from "./bash-display.js";
+import { codemodeRenderers, type CodemodeNextRenderers } from "./codemode-display.js";
 import { logToolDisplayDebug } from "./debug-logger.js";
 import { registerCleanup } from "./disposable.js";
 import {
@@ -174,6 +175,24 @@ function formatTruncationHint(remaining: number, expanded: boolean, theme: Rende
   return `\n${theme.fg("muted", `... (${remaining} more ${pluralize(remaining, "line")}${hint})`)}`;
 }
 
+/**
+ * Upper bound on the rendered length of a single preview line. Preview limits
+ * count newline-delimited source lines, so one extremely long logical line
+ * (minified JSON, stack traces) could otherwise wrap across hundreds of
+ * terminal rows and flood the viewport (upstream issue #36).
+ */
+const MAX_PREVIEW_LINE_COLUMNS = 2000;
+
+function capPreviewLineLengths(lines: string[]): string[] {
+  return lines.map((line) => {
+    if (line.length <= MAX_PREVIEW_LINE_COLUMNS) {
+      return line;
+    }
+    const hiddenChars = line.length - MAX_PREVIEW_LINE_COLUMNS;
+    return `${line.slice(0, MAX_PREVIEW_LINE_COLUMNS)}… (+${hiddenChars} chars truncated)`;
+  });
+}
+
 function buildPreviewText(
   lines: string[],
   maxLines: number,
@@ -184,7 +203,10 @@ function buildPreviewText(
     return theme.fg("muted", "↳ (no output)");
   }
 
-  const { shown, remaining } = previewLines(lines, maxLines);
+  // Expanded output is explicitly requested and keeps full fidelity; collapsed
+  // previews cap per-line length so wrapping cannot flood the viewport.
+  const effectiveLines = expanded ? lines : capPreviewLineLengths(lines);
+  const { shown, remaining } = previewLines(effectiveLines, maxLines);
   let text = shown
     .map((line) => theme.fg("toolOutput", sanitizeAnsiForThemedOutput(line)))
     .join("\n");
@@ -1188,7 +1210,9 @@ function renderEditDisplayCall(
     context,
     EDIT_PENDING_PREVIEW_STATE_KEY,
     previewKey,
-    () => buildPendingEditPreviewData(args, context.cwd),
+    () => buildPendingEditPreviewData(args, context.cwd, {
+      allowExternalDiffPreviews: getConfig().allowExternalDiffPreviews,
+    }),
   );
   return buildPendingDiffCallComponent(summaryText, previewData, context, getConfig(), theme);
 }
@@ -1350,10 +1374,16 @@ export function registerToolDisplayOverrides(
   // sessions). Resolution happens at render time, so registration order and
   // ownership races disappear by construction.
   const resolver = (toolName: string, next: () => unknown): unknown => {
-    const mine = resolveToolRenderers(toolName, getConfig, writeExecutionMetaByToolCallId, toolDisplayApi, () =>
-      lookupMcpCandidate(pi, toolName, mcpCandidateCache),
+    const nextRenderers = next() as CodemodeNextRenderers | undefined;
+    const mine = resolveToolRenderers(
+      toolName,
+      getConfig,
+      writeExecutionMetaByToolCallId,
+      toolDisplayApi,
+      () => lookupMcpCandidate(pi, toolName, mcpCandidateCache),
+      nextRenderers,
     );
-    return mine ?? next();
+    return mine ?? nextRenderers;
   };
 
   const piWithRendererApi = pi as {
@@ -1372,6 +1402,7 @@ function resolveToolRenderers(
   writeMeta: Map<string, WriteExecutionMeta>,
   api: ResolverBackedToolDisplayApi,
   lookupMcpCandidate: () => { isMcp: boolean; label: string },
+  nextRenderers: CodemodeNextRenderers | undefined,
 ): ToolRenderersLike | undefined {
   // 1. Explicit custom tool overrides from config.
   const override = getRuntimeCustomToolOverride(toolName, getConfig());
@@ -1401,6 +1432,12 @@ function resolveToolRenderers(
     getConfig().registerToolOverrides[toolName as BuiltInToolOverrideName]
   ) {
     return builtInRenderers(toolName as BuiltInToolOverrideName, getConfig, writeMeta);
+  }
+
+  // Pi's native codemode tool: compact status/trace/preview views, with
+  // expanded views deferring to the native renderers through next().
+  if (toolName === "codemode") {
+    return codemodeRenderers(getConfig, nextRenderers ?? {});
   }
 
   // 4. MCP heuristic, covering late-registered and resumed-session MCP tools.
@@ -1575,7 +1612,9 @@ function writeRenderers(getConfig: ConfigGetter, writeMeta: Map<string, WriteExe
         context,
         WRITE_PENDING_PREVIEW_STATE_KEY,
         previewKey,
-        () => buildPendingWritePreviewData(args, context.cwd),
+        () => buildPendingWritePreviewData(args, context.cwd, {
+          allowExternalDiffPreviews: getConfig().allowExternalDiffPreviews,
+        }),
       );
       return buildPendingDiffCallComponent(summaryText, previewData, context, getConfig(), theme);
     },
@@ -1716,7 +1755,11 @@ function builtInRenderers(
 
   return {
     renderCall(args, theme, context) {
-      return renderBashCall(args, theme, context as never);
+      const config = getConfig();
+      return renderBashCall(args, theme, context as never, config.bashCommandMaxChars, {
+        intentMode: config.bashIntentMode,
+        showCommand: config.bashIntentShowCommand,
+      });
     },
     renderResult(result, options, theme, context) {
       return renderBashDisplayResult(result, options, theme, context, getConfig);

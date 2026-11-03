@@ -1,18 +1,22 @@
 export const READ_OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const SEARCH_OUTPUT_MODES = ["hidden", "count", "preview"] as const;
 export const MCP_OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
+export const CODEMODE_OUTPUT_MODES = ["summary", "calls", "preview"] as const;
 export const CUSTOM_TOOL_OVERRIDE_KINDS = ["generic", "mcp"] as const;
 export const CUSTOM_TOOL_OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview"] as const;
+export const BASH_INTENT_MODES = ["off", "render", "render-and-instruct"] as const;
 export const DIFF_VIEW_MODES = ["auto", "split", "unified"] as const;
 export const DIFF_INDICATOR_MODES = ["bars", "classic", "none"] as const;
 
 export type ReadOutputMode = (typeof READ_OUTPUT_MODES)[number];
 export type SearchOutputMode = (typeof SEARCH_OUTPUT_MODES)[number];
 export type McpOutputMode = (typeof MCP_OUTPUT_MODES)[number];
+export type CodemodeOutputMode = (typeof CODEMODE_OUTPUT_MODES)[number];
 export type CustomToolOverrideKind = (typeof CUSTOM_TOOL_OVERRIDE_KINDS)[number];
 export type CustomToolOutputMode = (typeof CUSTOM_TOOL_OUTPUT_MODES)[number];
 export type BashOutputMode = (typeof BASH_OUTPUT_MODES)[number];
+export type BashIntentMode = (typeof BASH_INTENT_MODES)[number];
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
 export type DiffIndicatorMode = (typeof DIFF_INDICATOR_MODES)[number];
 
@@ -53,15 +57,20 @@ export interface ToolDisplayConfig {
 	readOutputMode: ReadOutputMode;
 	searchOutputMode: SearchOutputMode;
 	mcpOutputMode: McpOutputMode;
+	codemodeOutputMode: CodemodeOutputMode;
 	previewLines: number;
 	expandedPreviewMaxLines: number;
 	bashOutputMode: BashOutputMode;
 	bashCollapsedLines: number;
+	bashCommandMaxChars: number;
+	bashIntentMode: BashIntentMode;
+	bashIntentShowCommand: boolean;
 	diffViewMode: DiffViewMode;
 	diffIndicatorMode: DiffIndicatorMode;
 	diffSplitMinWidth: number;
 	diffCollapsedLines: number;
 	diffWordWrap: boolean;
+	allowExternalDiffPreviews: boolean;
 	showTruncationHints: boolean;
 	showRtkCompactionHints: boolean;
 }
@@ -83,15 +92,20 @@ export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
 	readOutputMode: "hidden",
 	searchOutputMode: "hidden",
 	mcpOutputMode: "hidden",
+	codemodeOutputMode: "calls",
 	previewLines: 8,
 	expandedPreviewMaxLines: 4000,
 	bashOutputMode: "opencode",
 	bashCollapsedLines: 10,
+	bashCommandMaxChars: 0,
+	bashIntentMode: "off",
+	bashIntentShowCommand: false,
 	diffViewMode: "auto",
 	diffIndicatorMode: "bars",
 	diffSplitMinWidth: 120,
 	diffCollapsedLines: 24,
 	diffWordWrap: true,
+	allowExternalDiffPreviews: false,
 	showTruncationHints: false,
 	showRtkCompactionHints: false,
 };

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import {
 	BUILT_IN_TOOL_OVERRIDE_NAMES,
 	BASH_OUTPUT_MODES,
+	BASH_INTENT_MODES,
 	CUSTOM_TOOL_OUTPUT_MODES,
 	CUSTOM_TOOL_OVERRIDE_KINDS,
 	DEFAULT_TOOL_DISPLAY_CONFIG,
@@ -13,6 +14,7 @@ import {
 	DIFF_INDICATOR_MODES,
 	DIFF_VIEW_MODES,
 	MCP_OUTPUT_MODES,
+	CODEMODE_OUTPUT_MODES,
 	READ_OUTPUT_MODES,
 	SEARCH_OUTPUT_MODES,
 	type ToolDisplayConfig,
@@ -90,10 +92,22 @@ function toMcpOutputMode(value: unknown): ToolDisplayConfig["mcpOutputMode"] {
 		: DEFAULT_TOOL_DISPLAY_CONFIG.mcpOutputMode;
 }
 
+function toCodemodeOutputMode(value: unknown): ToolDisplayConfig["codemodeOutputMode"] {
+	return CODEMODE_OUTPUT_MODES.includes(value as ToolDisplayConfig["codemodeOutputMode"])
+		? (value as ToolDisplayConfig["codemodeOutputMode"])
+		: DEFAULT_TOOL_DISPLAY_CONFIG.codemodeOutputMode;
+}
+
 function toBashOutputMode(value: unknown): ToolDisplayConfig["bashOutputMode"] {
 	return BASH_OUTPUT_MODES.includes(value as ToolDisplayConfig["bashOutputMode"])
 		? (value as ToolDisplayConfig["bashOutputMode"])
 		: DEFAULT_TOOL_DISPLAY_CONFIG.bashOutputMode;
+}
+
+function toBashIntentMode(value: unknown): ToolDisplayConfig["bashIntentMode"] {
+	return BASH_INTENT_MODES.includes(value as ToolDisplayConfig["bashIntentMode"])
+		? (value as ToolDisplayConfig["bashIntentMode"])
+		: DEFAULT_TOOL_DISPLAY_CONFIG.bashIntentMode;
 }
 
 function toDiffViewMode(value: unknown): ToolDisplayConfig["diffViewMode"] {
@@ -250,6 +264,7 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 		readOutputMode: toReadOutputMode(source.readOutputMode),
 		searchOutputMode: toSearchOutputMode(source.searchOutputMode),
 		mcpOutputMode: toMcpOutputMode(source.mcpOutputMode),
+		codemodeOutputMode: toCodemodeOutputMode(source.codemodeOutputMode),
 		previewLines: clampNumber(source.previewLines, 1, 80, DEFAULT_TOOL_DISPLAY_CONFIG.previewLines),
 		expandedPreviewMaxLines: clampNumber(
 			source.expandedPreviewMaxLines,
@@ -259,11 +274,21 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 		),
 		bashOutputMode: toBashOutputMode(source.bashOutputMode),
 		bashCollapsedLines: clampNumber(source.bashCollapsedLines, 0, 80, DEFAULT_TOOL_DISPLAY_CONFIG.bashCollapsedLines),
+		bashCommandMaxChars: clampNumber(source.bashCommandMaxChars, 0, 2000, DEFAULT_TOOL_DISPLAY_CONFIG.bashCommandMaxChars),
+		bashIntentMode: toBashIntentMode(source.bashIntentMode),
+		bashIntentShowCommand: toBoolean(
+			source.bashIntentShowCommand,
+			DEFAULT_TOOL_DISPLAY_CONFIG.bashIntentShowCommand,
+		),
 		diffViewMode: toDiffViewMode(source.diffViewMode),
 		diffIndicatorMode: toDiffIndicatorMode(source.diffIndicatorMode),
 		diffSplitMinWidth: clampNumber(source.diffSplitMinWidth, 70, 240, DEFAULT_TOOL_DISPLAY_CONFIG.diffSplitMinWidth),
 		diffCollapsedLines: clampNumber(source.diffCollapsedLines, 4, 240, DEFAULT_TOOL_DISPLAY_CONFIG.diffCollapsedLines),
 		diffWordWrap: toBoolean(source.diffWordWrap, DEFAULT_TOOL_DISPLAY_CONFIG.diffWordWrap),
+		allowExternalDiffPreviews: toBoolean(
+			source.allowExternalDiffPreviews,
+			DEFAULT_TOOL_DISPLAY_CONFIG.allowExternalDiffPreviews,
+		),
 		showTruncationHints: toBoolean(source.showTruncationHints, DEFAULT_TOOL_DISPLAY_CONFIG.showTruncationHints),
 		showRtkCompactionHints: toBoolean(
 			source.showRtkCompactionHints,
