@@ -1,6 +1,6 @@
 # Plan: Modernize pi-tool-display for Pi 1.x (fork: pi-tool-display-next)
 
-Status: In Progress (Phase 8)
+Status: In Progress (Phase 8 - complete except task 34, deferred, and task 39 npm publish, blocked on registry credentials)
 Scope: repo `noctrex/pi-tool-display-next` (fork of `MasuRii/pi-tool-display`); `package.json`, `src/tool-overrides.ts`, `src/config-store.ts`, `src/types.ts`, `src/thinking-label.ts`, `src/user-message-box-*.ts`, `tests/*`, CI workflow, README/CHANGELOG. User-visible impact: extension renders correctly on Pi >= 1.0 under a new package identity; config storage relocates once with a legacy import; config semantics otherwise unchanged (`registerToolOverrides` toggles become resolver claims).
 
 ## Context and root cause
