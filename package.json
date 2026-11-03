@@ -1,7 +1,7 @@
 {
-  "name": "pi-tool-display",
+  "name": "pi-tool-display-next",
   "version": "0.5.0",
-  "description": "Compact tool call rendering, diff visualization, and output truncation extension for Pi coding agent. Hides, collapses, and truncates verbose tool output for cleaner TUI display.",
+  "description": "Compact tool call rendering, diff visualization, and output truncation extension for Pi coding agent. Actively maintained fork of MasuRii/pi-tool-display targeting Pi 1.x. Hides, collapses, and truncates verbose tool output for cleaner TUI display.",
   "type": "module",
   "main": "./index.ts",
   "exports": {
@@ -30,6 +30,7 @@
     "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process'),p=require('path');const cwd=process.cwd();const normalized=cwd.split(p.sep).join('/');if(!normalized.includes('/.pi/agent/extensions/'))process.exit(0);const s=p.resolve(cwd,'../../scripts/patch-vulnerable-deps.mjs');if(!fs.existsSync(s))process.exit(0);const r=cp.spawnSync(process.execPath,[s,'--target',cwd,'--quiet'],{stdio:'inherit'});process.exit(r.status||0)\""
   },
   "keywords": [
+    "pi-tool-display-next",
     "pi-package",
     "pi",
     "pi-extension",
@@ -48,16 +49,16 @@
     "diff",
     "output-mode"
   ],
-  "author": "MasuRii",
+  "author": "noctrex (original author: MasuRii)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MasuRii/pi-tool-display.git"
+    "url": "git+https://github.com/noctrex/pi-tool-display-next.git"
   },
   "bugs": {
-    "url": "https://github.com/MasuRii/pi-tool-display/issues"
+    "url": "https://github.com/noctrex/pi-tool-display-next/issues"
   },
-  "homepage": "https://github.com/MasuRii/pi-tool-display#readme",
+  "homepage": "https://github.com/noctrex/pi-tool-display-next#readme",
   "engines": {
     "node": ">=20"
   },
