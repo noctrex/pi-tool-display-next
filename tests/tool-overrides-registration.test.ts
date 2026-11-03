@@ -119,13 +119,15 @@ test("registerToolDisplayOverrides copies built-in prompt metadata onto overridd
 		assert.equal(registeredTool.promptSnippet, builtInMetadata.promptSnippet);
 	}
 
-	assert.deepEqual(byName.get("read")?.promptGuidelines, (builtInTools.read as unknown as RegisteredToolLike).promptGuidelines);
-	assert.deepEqual(byName.get("edit")?.promptGuidelines, (builtInTools.edit as unknown as RegisteredToolLike).promptGuidelines);
-	assert.deepEqual(byName.get("write")?.promptGuidelines, (builtInTools.write as unknown as RegisteredToolLike).promptGuidelines);
-	assert.equal(byName.get("grep")?.promptGuidelines, undefined);
-	assert.equal(byName.get("find")?.promptGuidelines, undefined);
-	assert.equal(byName.get("ls")?.promptGuidelines, undefined);
-	assert.equal(byName.get("bash")?.promptGuidelines, undefined);
+	// The override copies whatever the built-in owner declares, so compare per
+	// tool instead of hardcoding which tools ship guidelines in this Pi version.
+	for (const [name, builtInTool] of Object.entries(builtInTools)) {
+		assert.deepEqual(
+			byName.get(name)?.promptGuidelines,
+			(builtInTool as unknown as RegisteredToolLike).promptGuidelines,
+			`${name} promptGuidelines match the built-in owner`,
+		);
+	}
 });
 
 test("registerToolDisplayOverrides registers built-in display renderers during extension load for pre-bind history rendering", () => {
