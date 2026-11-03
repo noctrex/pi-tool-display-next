@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  getToolDisplayConfigPath,
   loadToolDisplayConfig,
+  maybeImportLegacyConfig,
   normalizeToolDisplayConfig,
   saveToolDisplayConfig,
 } from "../src/config-store.ts";
+import { resolvePiAgentDir } from "../src/agent-dir.ts";
 import { DEFAULT_TOOL_DISPLAY_CONFIG } from "../src/types.ts";
 
 function withTempDir(name: string, run: (dir: string) => void): void {
@@ -83,5 +86,77 @@ test("config save writes normalized JSON and cleans temporary file on failure", 
     assert.equal(failed.success, false);
     assert.match(failed.error ?? "", /Failed to save/);
     assert.equal(existsSync(`${blockedConfigFile}.tmp`), false);
+  });
+});
+
+test("default config path is the fork file at the agent dir root", () => {
+  const configPath = getToolDisplayConfigPath();
+
+  assert.equal(
+    configPath,
+    join(resolvePiAgentDir(), "pi-tool-display-next.json"),
+    "config lives directly in the agent dir, not inside extensions/",
+  );
+});
+
+test("legacy config import copies valid JSON to an absent target", () => {
+  withTempDir("pi-tool-display-legacy-import-", (dir) => {
+    const legacyFile = join(dir, "legacy", "config.json");
+    const configFile = join(dir, "pi-tool-display-next.json");
+    mkdirSync(join(dir, "legacy"), { recursive: true });
+    writeFileSync(legacyFile, JSON.stringify({ previewLines: 3 }), "utf8");
+
+    const imported = maybeImportLegacyConfig(configFile, legacyFile);
+
+    assert.equal(imported, true, "import reported");
+    const persisted = JSON.parse(readFileSync(configFile, "utf8")) as { previewLines?: number };
+    assert.equal(persisted.previewLines, 3, "legacy settings preserved verbatim");
+  });
+});
+
+test("legacy config import skips when target exists", () => {
+  withTempDir("pi-tool-display-legacy-skip-", (dir) => {
+    const legacyFile = join(dir, "config.json");
+    const configFile = join(dir, "pi-tool-display-next.json");
+    writeFileSync(legacyFile, JSON.stringify({ previewLines: 3 }), "utf8");
+    writeFileSync(configFile, JSON.stringify({ previewLines: 7 }), "utf8");
+
+    const imported = maybeImportLegacyConfig(configFile, legacyFile);
+
+    assert.equal(imported, false, "existing config wins");
+    const persisted = JSON.parse(readFileSync(configFile, "utf8")) as { previewLines?: number };
+    assert.equal(persisted.previewLines, 7, "target untouched");
+  });
+});
+
+test("legacy config import skips when legacy file is missing or invalid", () => {
+  withTempDir("pi-tool-display-legacy-invalid-", (dir) => {
+    const configFile = join(dir, "pi-tool-display-next.json");
+
+    assert.equal(maybeImportLegacyConfig(configFile, join(dir, "missing.json")), false);
+    assert.equal(existsSync(configFile), false, "no target written for missing legacy");
+
+    const brokenFile = join(dir, "broken.json");
+    writeFileSync(brokenFile, "{not-json", "utf8");
+    assert.equal(maybeImportLegacyConfig(configFile, brokenFile), false);
+    assert.equal(existsSync(configFile), false, "no target written for broken legacy");
+  });
+});
+
+test("loading from a custom path never triggers the legacy import", () => {
+  withTempDir("pi-tool-display-custom-path-", (dir) => {
+    const legacyFile = join(dir, "legacy.json");
+    const configFile = join(dir, "custom.json");
+    writeFileSync(legacyFile, JSON.stringify({ previewLines: 3 }), "utf8");
+
+    const result = loadToolDisplayConfig(configFile);
+
+    assert.deepEqual(result.config, DEFAULT_TOOL_DISPLAY_CONFIG);
+    assert.equal(existsSync(configFile), false, "custom path load stays read-only");
+    assert.equal(
+      readFileSync(legacyFile, "utf8"),
+      JSON.stringify({ previewLines: 3 }),
+      "legacy file untouched",
+    );
   });
 });

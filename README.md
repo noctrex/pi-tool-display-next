@@ -84,7 +84,7 @@ The modal exposes the day-to-day controls most people change regularly:
 - diff layout mode
 - native user message box toggle
 
-Advanced options remain in `config.json`.
+Advanced options remain in `pi-tool-display-next.json`.
 
 ### Direct commands
 
@@ -131,11 +131,11 @@ import { decorateToolForDisplay, decorateMcpToolForDisplay } from "pi-tool-displ
 Runtime configuration is stored at:
 
 ```text
-Default global path: ~/.pi/agent/extensions/pi-tool-display/config.json
-Actual global path: $PI_CODING_AGENT_DIR/extensions/pi-tool-display/config.json when PI_CODING_AGENT_DIR is set
+Default global path: ~/.pi/agent/pi-tool-display-next.json
+Actual global path: $PI_CODING_AGENT_DIR/pi-tool-display-next.json when PI_CODING_AGENT_DIR is set
 ```
 
-A starter template is included at `config/config.example.json`.
+A starter template is included at `config/config.example.json`. On first load after upgrading from the pre-fork releases, an existing `extensions/pi-tool-display/config.json` is imported once to the new location; the old file is left in place.
 
 ### Configuration options
 
@@ -275,7 +275,7 @@ Notes:
 
 ### Debug logging
 
-Debug logging is disabled by default. Set `debug` to `true` in the extension root `config.json` only when collecting diagnostics; missing or non-`true` values are treated as `false`. When enabled, diagnostics are appended to `debug/debug.log` under a runtime-created `debug/` directory, and no debug output is written to the terminal.
+Debug logging is disabled by default. Set `debug` to `true` in the runtime config file (`~/.pi/agent/pi-tool-display-next.json`) only when collecting diagnostics; missing or non-`true` values are treated as `false`. When enabled, diagnostics are appended to `debug/debug.log` under a runtime-created `debug/` directory, and no debug output is written to the terminal.
 
 ## Rendering notes
 
@@ -328,7 +328,7 @@ Built-in tool overrides (including `bash`) are registered with deferred ownershi
 
 If your settings are not being applied:
 
-1. Check that the global Pi tool-display config exists (default: `~/.pi/agent/extensions/pi-tool-display/config.json`, respects `PI_CODING_AGENT_DIR`)
+1. Check that the global Pi tool-display config exists (default: `~/.pi/agent/pi-tool-display-next.json`, respects `PI_CODING_AGENT_DIR`)
 2. Make sure the JSON is valid
 3. Run `/tool-display show` to inspect the effective config summary
 

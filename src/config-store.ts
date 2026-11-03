@@ -1,5 +1,5 @@
 import { resolvePiAgentDir } from "./agent-dir.js";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
 	BUILT_IN_TOOL_OVERRIDE_NAMES,
@@ -20,8 +20,39 @@ import {
 } from "./types.js";
 import { toRecord } from "./tool-metadata.js";
 
-const CONFIG_DIR = join(resolvePiAgentDir(), "extensions", "pi-tool-display");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const CONFIG_DIR = resolvePiAgentDir();
+const CONFIG_FILE = join(CONFIG_DIR, "pi-tool-display-next.json");
+// Legacy location from the pre-fork releases, where the config lived inside
+// the installed extension directory. Read-only after the one-time import.
+const LEGACY_CONFIG_FILE = join(CONFIG_DIR, "extensions", "pi-tool-display", "config.json");
+
+let legacyImportAttempted = false;
+
+/**
+ * Copy a pre-fork config to the new agent-dir location exactly once, so an
+ * existing install keeps its settings across the rename. Returns true when a
+ * copy happened. Skips when the new file already exists, the legacy file is
+ * missing, or the legacy content is not valid JSON (the loader would surface
+ * that itself once the user points it at the legacy file).
+ */
+export function maybeImportLegacyConfig(
+	configFile: string = CONFIG_FILE,
+	legacyFile: string = LEGACY_CONFIG_FILE,
+): boolean {
+	try {
+		if (existsSync(configFile) || !existsSync(legacyFile)) {
+			return false;
+		}
+		const rawText = readFileSync(legacyFile, "utf-8");
+		JSON.parse(rawText);
+		mkdirSync(dirname(configFile), { recursive: true });
+		copyFileSync(legacyFile, configFile);
+		return true;
+	} catch {
+		// A broken legacy file must not block the new default config path.
+		return false;
+	}
+}
 
 interface LegacyToolDisplayConfigSource extends Partial<ToolDisplayConfig> {
 	registerReadToolOverride?: unknown;
@@ -241,6 +272,10 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 }
 
 export function loadToolDisplayConfig(configFile = CONFIG_FILE): ConfigLoadResult {
+	if (configFile === CONFIG_FILE && !legacyImportAttempted) {
+		legacyImportAttempted = true;
+		maybeImportLegacyConfig();
+	}
 	const fingerprint = getConfigFingerprint(configFile);
 	if (cachedConfigResult && cachedConfigFile === configFile && cachedConfigFingerprint === fingerprint) {
 		return cloneLoadResult(cachedConfigResult);
