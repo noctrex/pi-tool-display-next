@@ -56,7 +56,11 @@ const MIN_BORDER_WIDTH = 8;
 const TITLE_TEXT = " user ";
 const CONTENT_HORIZONTAL_PADDING_COLUMNS = 1;
 const USER_MESSAGE_TOP_MARGIN_LINES = 1;
-const USER_MESSAGE_PATCH_VERSION = 8;
+// Terminal prompt-zone markers emitted by Pi's native user message render.
+const OSC133_ZONE_START = "\x1b]133;A\x07";
+const OSC133_ZONE_END = "\x1b]133;B\x07";
+const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+const USER_MESSAGE_PATCH_VERSION = 9;
 const MAX_USER_MESSAGE_MARKDOWN_TEXT_LENGTH = 100_000;
 const MAX_USER_MESSAGE_MARKDOWN_LINE_COUNT = 2_000;
 
@@ -321,7 +325,7 @@ function renderUserMessageBodyLines(
   originalBodyLineCache?: WeakMap<object, CachedUserMessageBodyLines>,
 ): string[] {
   if (typeof instance !== "object" || instance === null) {
-    return originalRender.call(instance, innerWidth) as string[];
+    return safeOriginalRender(instance, innerWidth, originalRender);
   }
 
   if (!markdownState) {
@@ -330,13 +334,13 @@ function renderUserMessageBodyLines(
       return cached.lines;
     }
 
-    const lines = originalRender.call(instance, innerWidth) as string[];
+    const lines = safeOriginalRender(instance, innerWidth, originalRender);
     originalBodyLineCache?.set(instance, { width: innerWidth, lines });
     return lines;
   }
 
   if (shouldBypassUserMessageMarkdownRebuild(markdownState)) {
-    return originalRender.call(instance, innerWidth) as string[];
+    return safeOriginalRender(instance, innerWidth, originalRender);
   }
 
   try {
@@ -346,7 +350,27 @@ function renderUserMessageBodyLines(
       innerWidth,
     );
   } catch {
-    return originalRender.call(instance, innerWidth) as string[];
+    return safeOriginalRender(instance, innerWidth, originalRender);
+  }
+}
+
+/**
+ * Last-resort body rendering: if even the native render throws (for example
+ * before Pi's global theme is initialized), surface the raw message text so
+ * the user still sees their message instead of a broken render.
+ */
+function safeOriginalRender(
+  instance: unknown,
+  width: number,
+  originalRender: (width: number) => string[],
+): string[] {
+  try {
+    return originalRender.call(instance, width) as string[];
+  } catch {
+    const rawText = typeof (instance as { text?: unknown })?.text === "string"
+      ? (instance as { text: string }).text
+      : "";
+    return rawText.length > 0 ? rawText.split("\n") : [];
   }
 }
 
@@ -405,6 +429,14 @@ export function patchNativeUserMessagePrototype(
           ),
           buildBottomBorder(safeWidth, theme),
         ];
+
+        // Pi 1.5's native render wraps the first and last lines in OSC 133
+        // prompt-zone markers (scroll/click-to-prompt terminal integration).
+        // The patch replaces render, so it must re-emit the same contract.
+        if (output.length > 0) {
+          output[0] = OSC133_ZONE_START + output[0];
+          output[output.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + output[output.length - 1];
+        }
 
         if (canCacheFinalOutput) {
           finalOutputCache.set(

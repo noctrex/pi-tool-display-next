@@ -273,7 +273,7 @@ test("native user message renderer inserts one blank spacer line before the box"
 
   const rendered = prototype.render(24);
 
-  assert.equal(rendered[0], "");
+  assert.equal(rendered[0], "\x1b]133;A\x07", "top margin spacer carries the OSC 133 zone start");
   assert.match(rendered[1] ?? "", /^╭/);
 });
 

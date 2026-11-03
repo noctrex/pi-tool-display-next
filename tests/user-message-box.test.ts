@@ -704,7 +704,7 @@ test("nativeRender produces top margin spacer and border when enabled and width 
   };
   patchNativeUserMessagePrototype(prototype, () => undefined, () => true);
   const rendered = prototype.render(40);
-  assert.equal(rendered[0], "", "first line is top margin spacer");
+  assert.equal(rendered[0], "\x1b]133;A\x07", "first line is the OSC 133 prompt-zone-marked top margin spacer");
   assert.ok(rendered[1]?.includes("╭"), "second line has top border");
   assert.ok(rendered.some((l) => l.includes("│")), "has content border lines");
   assert.ok(rendered.some((l) => l.includes("╰")), "has bottom border");
