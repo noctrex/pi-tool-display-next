@@ -1,9 +1,13 @@
 <div align="center">
 
-# pi-tool-display
+# pi-tool-display-next
 
-[![npm version](https://img.shields.io/npm/v/pi-tool-display?style=for-the-badge)](https://www.npmjs.com/package/pi-tool-display)
-[![License](https://img.shields.io/github/license/MasuRii/pi-tool-display?style=for-the-badge)](LICENSE)
+Actively maintained fork of [MasuRii/pi-tool-display](https://github.com/MasuRii/pi-tool-display), modernized for **Pi 1.x**. Compact tool call rendering, diff visualization, and output truncation for the Pi coding agent.
+
+Requires Pi >= 1.0. Install as a Pi package: `pi install npm:pi-tool-display-next`.
+
+[![npm version](https://img.shields.io/npm/v/pi-tool-display-next?style=for-the-badge)](https://www.npmjs.com/package/pi-tool-display-next)
+[![License](https://img.shields.io/github/license/noctrex/pi-tool-display-next?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=for-the-badge)]()
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y01PSSVR)

@@ -1,6 +1,6 @@
 {
   "name": "pi-tool-display-next",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Compact tool call rendering, diff visualization, and output truncation extension for Pi coding agent. Actively maintained fork of MasuRii/pi-tool-display targeting Pi 1.x. Hides, collapses, and truncates verbose tool output for cleaner TUI display.",
   "type": "module",
   "main": "./index.ts",
@@ -59,7 +59,7 @@
   },
   "homepage": "https://github.com/noctrex/pi-tool-display-next#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "publishConfig": {
     "access": "public"

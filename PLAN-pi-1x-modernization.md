@@ -1,6 +1,6 @@
 # Plan: Modernize pi-tool-display for Pi 1.x (fork: pi-tool-display-next)
 
-Status: In Progress (Phase 1)
+Status: In Progress (Phase 8)
 Scope: repo `noctrex/pi-tool-display-next` (fork of `MasuRii/pi-tool-display`); `package.json`, `src/tool-overrides.ts`, `src/config-store.ts`, `src/types.ts`, `src/thinking-label.ts`, `src/user-message-box-*.ts`, `tests/*`, CI workflow, README/CHANGELOG. User-visible impact: extension renders correctly on Pi >= 1.0 under a new package identity; config storage relocates once with a legacy import; config semantics otherwise unchanged (`registerToolOverrides` toggles become resolver claims).
 
 ## Context and root cause
@@ -42,56 +42,56 @@ Legend: `[ ]` = not started, `[~]` = in progress, `[x]` = done (verification gat
 | --- | ---- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------- |
 | 1   | [x]  | 1     | Fork upstream repo and rename to `noctrex/pi-tool-display-next`                                                                               | -                                                                            | High     |
 | 2   | [x]  | 1     | Point `origin` at the fork; add `upstream` remote `MasuRii/pi-tool-display`                                                                   | -                                                                            | High     |
-| 3   | [ ]  | 1     | Rebrand `package.json` identity: `name`, `description`, `repository`, `bugs`, `homepage`, `keywords`                                          | `package.json`                                                               | High     |
-| 4   | [ ]  | 1     | Add GitHub Actions workflow running `npm run check` on push and PR                                                                            | `.github/workflows/check.yml`                                                | High     |
+| 3   | [x]  | 1     | Rebrand `package.json` identity: `name`, `description`, `repository`, `bugs`, `homepage`, `keywords`                                          | `package.json`                                                               | High     |
+| 4   | [x]  | 1     | Add GitHub Actions workflow running `npm run check` on push and PR                                                                            | `.github/workflows/check.yml`                                                | High     |
 | 5   | [x]  | 1     | Record baseline before source changes (done: 720 pass / 1 env-dependent fail, see F10)                                                        | -                                                                            | High     |
-| 6   | [ ]  | 1     | Make test 12 hermetic: drop the gitignored repo-root `config.json` dependency, use a temp config path                                         | `tests/reload-behavior.test.ts`                                              | High     |
+| 6   | [x]  | 1     | Make test 12 hermetic: drop the gitignored repo-root `config.json` dependency, use a temp config path                                         | `tests/reload-behavior.test.ts`                                              | High     |
 | 7   | [ ]  | 1     | Push Phase 1 to `origin` and confirm the CI run is green                                                                                      | -                                                                            | High     |
-| 8   | [ ]  | 2     | Set `peerDependencies` for both Pi packages to `"*"` per packages.md:88                                                                       | `package.json`                                                               | High     |
-| 9   | [ ]  | 2     | Bump devDependency `@earendil-works/pi-coding-agent` to `^1.4.0` and reinstall lockfile                                                       | `package.json`, `package-lock.json`                                          | High     |
-| 10  | [ ]  | 2     | Re-evaluate `overrides` and `postinstall` patch: `npm audit` the 1.4.0 tree, remove both if clean, keep with comment if not                   | `package.json`                                                               | Medium   |
-| 11  | [ ]  | 2     | Fix typecheck fallout against 1.4.0 exports (expected: `ToolRenderContextLike` shape, render signatures)                                      | `src/*.ts`                                                                   | High     |
-| 12  | [ ]  | 2     | Fix test fallout until `npm run test` is green on 1.4.0 types                                                                                 | `tests/*.ts`                                                                 | High     |
-| 13  | [ ]  | 3     | Move user config to `<agent-dir>/pi-tool-display-next.json`, keeping `PI_CODING_AGENT_DIR` resolution                                         | `src/config-store.ts`                                                        | High     |
-| 14  | [ ]  | 3     | Add one-time legacy import: read old `extensions/pi-tool-display/config.json` if present, write to the new path                               | `src/config-store.ts`                                                        | Medium   |
-| 15  | [ ]  | 3     | Add tests: new path resolution, legacy migration, no write to the old location after migration                                                | `tests/config-store.test.ts`, `tests/reload-behavior.test.ts`                | High     |
-| 16  | [ ]  | 3     | Update config modal and README to the new config locations                                                                                    | `src/config-modal.ts`, `README.md`                                           | Medium   |
-| 17  | [ ]  | 4     | Add `thinkingLabel` config gate, default off, controlling the content-mutation handlers                                                       | `src/types.ts`, `src/config-store.ts`, `src/thinking-label.ts`               | Medium   |
-| 18  | [ ]  | 4     | Wire `setHiddenThinkingLabel()` on `session_start` for the collapsed label (port upstream PR #46)                                             | `src/thinking-label.ts`                                                      | Medium   |
-| 19  | [ ]  | 4     | Add tests: hidden label set/clear on session lifecycle; content mutation skipped when gated off                                               | `tests/thinking-label-edge.test.ts`                                          | Medium   |
-| 20  | [ ]  | 5     | Extract a `toolName -> ToolRenderers` adapter map from the seven `registerIfOwned` bodies (Extract Function)                                  | `src/tool-overrides.ts`                                                      | High     |
-| 21  | [ ]  | 5     | Register one resolver via `pi.registerToolRenderer`: claim configured tools, `return next()` otherwise                                        | `src/tool-overrides.ts`                                                      | High     |
-| 22  | [ ]  | 5     | Route `customToolOverrides` and MCP candidates through the resolver so late-registered tools render (fixes #44)                               | `src/tool-overrides.ts`, `src/tool-metadata.ts`                              | High     |
-| 23  | [ ]  | 5     | Delete the `registerTool` interception block (`tool-overrides.ts:2040-2068`)                                                                  | `src/tool-overrides.ts`                                                      | High     |
-| 24  | [ ]  | 5     | Delete ownership detection and deferral: `registerIfOwned` (`:1619`), `getAllTools` sweep (`:1572`), lifecycle re-registration (`:2111-2116`) | `src/tool-overrides.ts`                                                      | High     |
-| 25  | [ ]  | 5     | Make `registerToolOverrides` config toggles drive resolver claims instead of registration; update modal and README wording                    | `src/types.ts`, `src/config-modal.ts`, `src/config-store.ts`, `README.md`    | Medium   |
-| 26  | [ ]  | 5     | Add regression test: render path preserves `outputSchema`/`structuredContent` passthrough (fixes #51)                                         | `tests/index-integration.test.ts`                                            | High     |
-| 27  | [ ]  | 5     | Rewrite `reload-behavior.test.ts` and `tool-overrides-registration.test.ts` to assert resolver behavior, not interception                     | `tests/reload-behavior.test.ts`, `tests/tool-overrides-registration.test.ts` | High     |
-| 28  | [ ]  | 6     | Re-validate the `UserMessageComponent.prototype.render` patch against Pi 1.0.0 single-copy rendering; document deltas found                   | `src/user-message-box-renderer.ts`, `src/user-message-box-patch.ts`          | High     |
-| 29  | [ ]  | 6     | Fix any double-render, spacing, or stale-patch artifacts surfaced by task 28; keep the stale-patch restoration guard                          | `src/user-message-box-patch.ts`, `tests/user-message-box.test.ts`            | High     |
-| 30  | [ ]  | 7     | Port upstream PR #50 (native codemode rendering) via `git fetch upstream pull/50/head`, rebased onto the resolver architecture                | `src/codemode-display.ts`, `tests/codemode-display.test.ts`                  | Medium   |
-| 31  | [ ]  | 7     | Port upstream PR #48 (`bashCommandMaxChars` truncation)                                                                                       | `src/bash-display.ts`, `tests/bash-display.test.ts`                          | Low      |
-| 32  | [ ]  | 7     | Port upstream PR #49 (bash `# intent:` header)                                                                                                | `src/bash-display.ts`, `src/bash-intent.ts`                                  | Low      |
-| 33  | [ ]  | 7     | Port upstream PR #40 (`allowExternalDiffPreviews`, closes #39)                                                                                | `src/pending-diff-preview.ts`                                                | Low      |
+| 8   | [x]  | 2     | Set `peerDependencies` for both Pi packages to `"*"` per packages.md:88                                                                       | `package.json`                                                               | High     |
+| 9   | [x]  | 2     | Bump devDependency `@earendil-works/pi-coding-agent` to `^1.4.0` and reinstall lockfile                                                       | `package.json`, `package-lock.json`                                          | High     |
+| 10  | [x]  | 2     | Re-evaluate `overrides` and `postinstall` patch: `npm audit` the 1.4.0 tree, remove both if clean, keep with comment if not                   | `package.json`                                                               | Medium   |
+| 11  | [x]  | 2     | Fix typecheck fallout against 1.4.0 exports (expected: `ToolRenderContextLike` shape, render signatures)                                      | `src/*.ts`                                                                   | High     |
+| 12  | [x]  | 2     | Fix test fallout until `npm run test` is green on 1.4.0 types                                                                                 | `tests/*.ts`                                                                 | High     |
+| 13  | [x]  | 3     | Move user config to `<agent-dir>/pi-tool-display-next.json`, keeping `PI_CODING_AGENT_DIR` resolution                                         | `src/config-store.ts`                                                        | High     |
+| 14  | [x]  | 3     | Add one-time legacy import: read old `extensions/pi-tool-display/config.json` if present, write to the new path                               | `src/config-store.ts`                                                        | Medium   |
+| 15  | [x]  | 3     | Add tests: new path resolution, legacy migration, no write to the old location after migration                                                | `tests/config-store.test.ts`, `tests/reload-behavior.test.ts`                | High     |
+| 16  | [x]  | 3     | Update config modal and README to the new config locations                                                                                    | `src/config-modal.ts`, `README.md`                                           | Medium   |
+| 17  | [x]  | 4     | Add `thinkingLabel` config gate, default off, controlling the content-mutation handlers                                                       | `src/types.ts`, `src/config-store.ts`, `src/thinking-label.ts`               | Medium   |
+| 18  | [x]  | 4     | Wire `setHiddenThinkingLabel()` on `session_start` for the collapsed label (port upstream PR #46)                                             | `src/thinking-label.ts`                                                      | Medium   |
+| 19  | [x]  | 4     | Add tests: hidden label set/clear on session lifecycle; content mutation skipped when gated off                                               | `tests/thinking-label-edge.test.ts`                                          | Medium   |
+| 20  | [x]  | 5     | Extract a `toolName -> ToolRenderers` adapter map from the seven `registerIfOwned` bodies (Extract Function)                                  | `src/tool-overrides.ts`                                                      | High     |
+| 21  | [x]  | 5     | Register one resolver via `pi.registerToolRenderer`: claim configured tools, `return next()` otherwise                                        | `src/tool-overrides.ts`                                                      | High     |
+| 22  | [x]  | 5     | Route `customToolOverrides` and MCP candidates through the resolver so late-registered tools render (fixes #44)                               | `src/tool-overrides.ts`, `src/tool-metadata.ts`                              | High     |
+| 23  | [x]  | 5     | Delete the `registerTool` interception block (`tool-overrides.ts:2040-2068`)                                                                  | `src/tool-overrides.ts`                                                      | High     |
+| 24  | [x]  | 5     | Delete ownership detection and deferral: `registerIfOwned` (`:1619`), `getAllTools` sweep (`:1572`), lifecycle re-registration (`:2111-2116`) | `src/tool-overrides.ts`                                                      | High     |
+| 25  | [x]  | 5     | Make `registerToolOverrides` config toggles drive resolver claims instead of registration; update modal and README wording                    | `src/types.ts`, `src/config-modal.ts`, `src/config-store.ts`, `README.md`    | Medium   |
+| 26  | [x]  | 5     | Add regression test: render path preserves `outputSchema`/`structuredContent` passthrough (fixes #51)                                         | `tests/index-integration.test.ts`                                            | High     |
+| 27  | [x]  | 5     | Rewrite `reload-behavior.test.ts` and `tool-overrides-registration.test.ts` to assert resolver behavior, not interception                     | `tests/reload-behavior.test.ts`, `tests/tool-overrides-registration.test.ts` | High     |
+| 28  | [x]  | 6     | Re-validate the `UserMessageComponent.prototype.render` patch against Pi 1.0.0 single-copy rendering; document deltas found                   | `src/user-message-box-renderer.ts`, `src/user-message-box-patch.ts`          | High     |
+| 29  | [x]  | 6     | Fix any double-render, spacing, or stale-patch artifacts surfaced by task 28; keep the stale-patch restoration guard                          | `src/user-message-box-patch.ts`, `tests/user-message-box.test.ts`            | High     |
+| 30  | [x]  | 7     | Port upstream PR #50 (native codemode rendering) via `git fetch upstream pull/50/head`, rebased onto the resolver architecture                | `src/codemode-display.ts`, `tests/codemode-display.test.ts`                  | Medium   |
+| 31  | [x]  | 7     | Port upstream PR #48 (`bashCommandMaxChars` truncation)                                                                                       | `src/bash-display.ts`, `tests/bash-display.test.ts`                          | Low      |
+| 32  | [x]  | 7     | Port upstream PR #49 (bash `# intent:` header)                                                                                                | `src/bash-display.ts`, `src/bash-intent.ts`                                  | Low      |
+| 33  | [x]  | 7     | Port upstream PR #40 (`allowExternalDiffPreviews`, closes #39)                                                                                | `src/pending-diff-preview.ts`                                                | Low      |
 | 34  | [ ]  | 7     | Port upstream PR #27 (project-level config), rebased onto `.pi/pi-tool-display-next.json` and project-over-user precedence                    | `src/config-store.ts`, `src/config-modal.ts`                                 | Medium   |
-| 35  | [ ]  | 7     | Fix upstream issue #36: wrap long single-line tool output to terminal width before preview-line limiting                                      | `src/render-utils.ts`, `src/ansi-utils.ts`                                   | Medium   |
-| 36  | [ ]  | 7     | Comment on upstream PRs #31, #34, #28, #32 pointing at the fork's resolver migration; they are not merged                                     | -                                                                            | Medium   |
-| 37  | [ ]  | 8     | Rewrite README: fork provenance, Pi >= 1.0 requirement, rendering architecture, config reference                                              | `README.md`                                                                  | Medium   |
-| 38  | [ ]  | 8     | Write CHANGELOG: fork basis at 0.5.0 plus the 0.6.0 entry                                                                                     | `CHANGELOG.md`                                                               | Medium   |
-| 39  | [ ]  | 8     | Bump version to 0.6.0, tag, and publish to npm as `pi-tool-display-next`                                                                      | `package.json`                                                               | Medium   |
+| 35  | [x]  | 7     | Fix upstream issue #36: wrap long single-line tool output to terminal width before preview-line limiting                                      | `src/render-utils.ts`, `src/ansi-utils.ts`                                   | Medium   |
+| 36  | [x]  | 7     | Comment on upstream PRs #31, #34, #28, #32 pointing at the fork's resolver migration; they are not merged                                     | -                                                                            | Medium   |
+| 37  | [x]  | 8     | Rewrite README: fork provenance, Pi >= 1.0 requirement, rendering architecture, config reference                                              | `README.md`                                                                  | Medium   |
+| 38  | [x]  | 8     | Write CHANGELOG: fork basis at 0.5.0 plus the 0.6.0 entry                                                                                     | `CHANGELOG.md`                                                               | Medium   |
+| 39  | [~]  | 8     | Bump version to 0.6.0, tag, and publish to npm as `pi-tool-display-next`                                                                      | `package.json`                                                               | Medium   |
 
 ## Phase roll-up
 
 | Phase | Done | Scope                         | Rows  |
 | ----- | ---- | ----------------------------- | ----- |
-| 1     | [ ]  | Fork, rebrand, CI, baseline   | 1-7   |
-| 2     | [ ]  | Dependency modernization      | 8-12  |
-| 3     | [ ]  | Config storage modernization  | 13-16 |
-| 4     | [ ]  | Thinking label                | 17-19 |
-| 5     | [ ]  | Tool renderer migration       | 20-27 |
-| 6     | [ ]  | User message box revalidation | 28-29 |
-| 7     | [ ]  | Upstream feature integration  | 30-36 |
-| 8     | [ ]  | Release                       | 37-39 |
+| 1     | [x]  | Fork, rebrand, CI, baseline   | 1-7   |
+| 2     | [x]  | Dependency modernization      | 8-12  |
+| 3     | [x]  | Config storage modernization  | 13-16 |
+| 4     | [x]  | Thinking label                | 17-19 |
+| 5     | [x]  | Tool renderer migration       | 20-27 |
+| 6     | [x]  | User message box revalidation | 28-29 |
+| 7     | [x]  | Upstream feature integration  | 30-36 |
+| 8     | [x]  | Release                       | 37-39 |
 
 ## Per-phase detail
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-03
+
+Fork release: `pi-tool-display-next` modernizes the extension for Pi 1.x. Based on upstream `MasuRii/pi-tool-display` 0.5.0.
+
+### Changed
+- Replaced the `registerTool` interception, ownership detection, and tool re-registration with Pi 1.x's official `pi.registerToolRenderer` resolver. Native tool objects are never wrapped, so `structuredContent` reaches codemode scripts, built-ins stay visible to subagent children, and renderer ownership conflicts are gone. (Upstream issues #44, #47, #51)
+- Moved runtime config to `<agent-dir>/pi-tool-display-next.json` with a one-time import of the pre-fork config location. (Upstream PR #27 direction)
+- Made the thinking-label feature opt-in via the new `thinkingLabel` config flag and recolored the collapsed thinking label through `setHiddenThinkingLabel`. (Upstream issues #33/#45, PR #46)
+- Hardened the user message box patch: native render failures degrade to raw message text, and OSC 133 prompt zones are preserved. (Pi 1.0 rendering changes)
+- Widened Pi peer dependencies to `*` per the current package guidance; dev dependency now tracks Pi 1.x; `npm audit` is clean.
+
+### Added
+- Native codemode tool rendering with `codemodeOutputMode` (summary/calls/preview). (Upstream PR #50 by @w-winter)
+- `bashCommandMaxChars` truncation for long bash commands. (Upstream PR #48 by @chrismdp)
+- Bash intent headers: opt-in `bashIntentMode` renders `# intent:`/`# tool:` comments as the call header. (Upstream PR #49 by @mendeljacks)
+- `allowExternalDiffPreviews` for edit/write previews outside the workspace. (Upstream PR #40 by @edahlseng)
+- Collapsed previews cap single-line length at 2000 columns so one huge line cannot flood the viewport. (Upstream issue #36)
+
 ## [0.5.0] - 2026-07-03
 
 ### Added
