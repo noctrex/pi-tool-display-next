@@ -1,6 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "./tool-metadata.js";
 import { onReloadShutdown } from "./extension-lifecycle.js";
+import type { ToolDisplayConfig } from "./types.js";
+
+export type ThinkingLabelConfig = Pick<ToolDisplayConfig, "thinkingLabel">;
 
 interface ThemeLike {
   fg(color: string, text: string): string;
@@ -319,7 +322,7 @@ function handleThinkingContextEvent(event: unknown, ctx: ExtensionContext | unde
   }
 }
 
-export function registerThinkingLabeling(pi: ExtensionAPI): void {
+export function registerThinkingLabeling(pi: ExtensionAPI, getConfig: () => ThinkingLabelConfig): void {
   if (registeredThinkingApis.has(pi)) {
     return;
   }
@@ -330,14 +333,46 @@ export function registerThinkingLabeling(pi: ExtensionAPI): void {
   });
 
   pi.on("message_update", async (event, ctx) => {
+    if (!getConfig().thinkingLabel) {
+      return;
+    }
     handleThinkingMessageUpdateEvent(event, ctx);
   });
 
   pi.on("message_end", async (event, ctx) => {
+    if (!getConfig().thinkingLabel) {
+      return;
+    }
     handleThinkingMessageEndEvent(event, ctx);
   });
 
   pi.on("context", async (event, ctx) => {
+    if (!getConfig().thinkingLabel) {
+      return;
+    }
     handleThinkingContextEvent(event, ctx);
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (!getConfig().thinkingLabel) {
+      return;
+    }
+    // Re-applies on session_start; covers /reload where Pi resets labels
+    // before re-emitting the event.
+    const ui = ctx?.ui;
+    if (typeof ui?.setHiddenThinkingLabel !== "function") {
+      return; // Absent outside the interactive TUI; RPC ships a no-op anyway.
+    }
+
+    try {
+      // theme.fg() resets only the foreground color, so the accent wrap
+      // recolors Pi's italic thinkingText label without touching its styling.
+      ui.setHiddenThinkingLabel(
+        ui.theme ? ui.theme.fg("accent", "Thinking...") : "Thinking...",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx?.ui.notify(`Hidden thinking label formatting failed: ${message}`, "warning");
+    }
   });
 }

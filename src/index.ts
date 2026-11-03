@@ -85,7 +85,7 @@ export default function toolDisplayExtension(pi: ExtensionAPI): void {
 
   registerToolDisplayOverrides(pi, getEffectiveConfig);
   registerNativeUserMessageBox(pi, getConfig);
-  registerThinkingLabeling(pi);
+  registerThinkingLabeling(pi, getConfig);
 
   pi.registerCommand("tool-display", {
     description: "Configure tool output rendering (OpenCode-style)",

@@ -572,7 +572,7 @@ test("7: thinking label event handlers are registered on each extension call", (
   const { api, capturedHandlers } = createApiStub();
 
   // First call registers thinking label handlers
-  registerThinkingLabeling(api);
+  registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
   const handlerEvents = capturedHandlers.map((h) => h.event);
 
   assert.ok(handlerEvents.includes("message_update"), "message_update registered");
@@ -595,7 +595,7 @@ test("7: thinking label event handlers are registered on each extension call", (
   assert.equal(contextCount, 1, "one context handler after first call");
 
   // Second call with same API — duplicate prevention skips re-registration
-  registerThinkingLabeling(api);
+  registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
   const messageUpdateAfterSecond = capturedHandlers.filter(
     (h) => h.event === "message_update",
   ).length;
@@ -618,7 +618,7 @@ test("7: thinking label event handlers are registered on each extension call", (
   }
 
   // Third call — guard was reset by reload, so handlers register again
-  registerThinkingLabeling(api);
+  registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
   const messageUpdateAfterReload = capturedHandlers.filter(
     (h) => h.event === "message_update",
   ).length;

@@ -11,13 +11,15 @@ type CapturedHandler = (
   ctx?: unknown,
 ) => Promise<void> | void;
 
-function captureThinkingHandlers(): Map<string, CapturedHandler> {
+function captureThinkingHandlers(
+  getConfig: () => { thinkingLabel: boolean } = () => ({ thinkingLabel: true }),
+): Map<string, CapturedHandler> {
   const handlers = new Map<string, CapturedHandler>();
   registerThinkingLabeling({
     on(eventName: string, handler: CapturedHandler): void {
       handlers.set(eventName, handler);
     },
-  } as never);
+  } as never, getConfig);
   return handlers;
 }
 
