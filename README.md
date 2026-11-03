@@ -6,22 +6,14 @@ Actively maintained fork of [MasuRii/pi-tool-display](https://github.com/MasuRii
 
 Requires Pi >= 1.0. Install as a Pi package: `pi install npm:pi-tool-display-next`.
 
-[![npm version](https://img.shields.io/npm/v/pi-tool-display-next?style=for-the-badge)](https://www.npmjs.com/package/pi-tool-display-next)
 [![License](https://img.shields.io/github/license/noctrex/pi-tool-display-next?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=for-the-badge)]()
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y01PSSVR)
 
 OpenCode-style tool rendering for the [Pi coding agent](https://github.com/mariozechner/pi).
 
 `pi-tool-display-next` keeps tool calls compact by default, adds richer diff rendering for file edits, and improves a few core chat UI details such as thinking labels and the native user prompt box. Rendering goes through Pi's official `pi.registerToolRenderer` resolver API, so MCP tools, codemode calls, and late-registered extension tools all render without touching the tool objects themselves. Requires Pi >= 1.0.
 
-<img width="1360" height="752" alt="image" src="https://github.com/user-attachments/assets/777944a2-18b2-4642-b035-2c703a5abb1b" />
-
-<img width="978" height="670" alt="image" src="https://github.com/user-attachments/assets/122b69ce-6c99-4aaa-ba93-236f97a1d8b4" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/7d5e36d3-cbe1-4d54-8bed-ae3dbdef870c" />
-<img width="1919" height="566" alt="image" src="https://github.com/user-attachments/assets/68a1619b-62da-480f-8de3-2af441ccf6ff" />
-<img width="1919" height="550" alt="image" src="https://github.com/user-attachments/assets/1d3f0b38-a5b5-47fc-b54b-8b55cc2bfaf1" />
+<!-- Screenshots removed: the previous images were inherited from upstream pi-tool-display and show the old tool. Add current pi-tool-display-next screenshots here. -->
 
 </div>
 
@@ -83,11 +75,14 @@ The modal exposes the day-to-day controls most people change regularly:
 
 - preset profile
 - read output mode
-- grep/find/ls output mode
+- search (grep/find/ls) output mode
 - MCP output mode (when MCP is available)
+- codemode output mode
 - preview line count
+- bash output mode
 - bash collapsed line count
 - diff layout mode
+- diff indicator mode
 - native user message box toggle
 
 Advanced options remain in `pi-tool-display-next.json`.
@@ -148,7 +143,7 @@ A starter template is included at `config/config.example.json`. On first load af
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `debug` | boolean | `false` | Opt-in file logging for extension diagnostics; missing values are treated as `false` |
-| `enabled` | boolean | `true` | Master switch for the extension's rendering |
+| `enabled` | boolean | `true` | When `false`, the extension exits at load: no rendering and no `/tool-display` command |
 | `registerToolOverrides` | object | all `true` | Built-in tool rendering claim flags |
 | `customToolOverrides` | object | `{}` | Explicit opt-in rendering rules for non-built-in extension tools |
 | `enableNativeUserMessageBox` | boolean | `true` | Enable bordered user prompt rendering |
@@ -162,7 +157,7 @@ A starter template is included at `config/config.example.json`. On first load af
 | `bashOutputMode` | string | `"opencode"` | `opencode` (collapse), `summary` (line count), or `preview` (show lines) |
 | `bashCollapsedLines` | number | `10` | Lines shown for collapsed bash output (opencode mode) |
 | `bashCommandMaxChars` | number | `0` | Truncate long bash commands to this many characters before display (`0` disables) |
-| `bashIntentMode` | string | `"off"` | `off`, `render` (show `# intent:` comment as a header line), or `render-and-instruct` |
+| `bashIntentMode` | string | `"off"` | `off`; `render` (show a `# intent:` comment as a header line with the tool icon); or `render-and-instruct` (also append the intent convention to the system prompt while bash is claimed) |
 | `bashIntentShowCommand` | boolean | `false` | Also show the raw command under the intent header |
 | `diffViewMode` | string | `"auto"` | `auto`, `split`, or `unified` |
 | `diffIndicatorMode` | string | `"bars"` | `bars` (vertical indicators), `classic` (+/- markers), or `none` |
@@ -294,7 +289,7 @@ Notes:
 
 ### Debug logging
 
-Debug logging is disabled by default. Set `debug` to `true` in the runtime config file (`~/.pi/agent/pi-tool-display-next.json`) only when collecting diagnostics; missing or non-`true` values are treated as `false`. When enabled, diagnostics are appended to `debug/debug.log` under a runtime-created `debug/` directory, and no debug output is written to the terminal.
+Debug logging is disabled by default. Set `debug` to `true` in the runtime config file (`~/.pi/agent/pi-tool-display-next.json`) only when collecting diagnostics; missing or non-`true` values are treated as `false`. When enabled, diagnostics are appended to `debug/debug.log` inside the extension's install directory (the directory that contains `src/`), in a runtime-created `debug/` subdirectory, and no debug output is written to the terminal.
 
 ## Rendering notes
 
@@ -302,7 +297,7 @@ Debug logging is disabled by default. Set `debug` to `true` in the runtime confi
 
 `edit` and `write` results use the same diff renderer. In `auto` mode the extension chooses split or unified layout based on available width. On narrow panes it clamps rendered lines and shortens collapsed hint text so the diff stays readable instead of spilling past the terminal width.
 
-While tool arguments are still streaming, partial `edit` and `write` calls can show projected pending previews. Deterministic edits render as `pending edit` diffs against current file contents, writes render as `pending overwrite` or `pending create`, and unresolved projections show a clear preview notice instead of guessing. Preview file reads are scoped to the active workspace so pending previews avoid reading paths outside the current project.
+While tool arguments are still streaming, partial `edit` and `write` calls can show projected pending previews. Deterministic edits render as `pending edit` diffs against current file contents, writes render as `pending overwrite` or `pending create`, and unresolved projections show a clear preview notice instead of guessing. Preview file reads are scoped to the active workspace; set `allowExternalDiffPreviews` to `true` to also allow previews for paths outside the current project.
 
 When diff input includes Pi anchored read lines such as `12#AB:content`, the renderer treats the anchor as line metadata and displays the `LINE#HASH` label in the gutter while keeping the content aligned for split, unified, and compact diff layouts.
 
