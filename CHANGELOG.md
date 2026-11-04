@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+
+### Added
+
+- The `/tool-display` settings TUI now exposes every configurable field: the extension master switch, the seven per-tool claim toggles (read/grep/find/ls/bash/edit/write), `thinkingLabel`, `strictAnsiSanitization`, `allowExternalDiffPreviews`, `diffWordWrap`, `bashIntentShowCommand`, `bashIntentMode`, `bashCommandMaxChars`, `expandedPreviewMaxLines`, `diffSplitMinWidth`, `diffCollapsedLines`, `showTruncationHints`, and RTK compaction hints when RTK is detected. Only `customToolOverrides` remains a manual JSON edit because it maps arbitrary tool names.
+- Stale "manual JSON edits" hints in the settings inspector were rewritten to match the expanded coverage.
+
+### Changed
+
+- Presets now switch only the verbosity profile fields they define (output modes and the two line budgets) and preserve every other setting, so toggles such as `strictAnsiSanitization` or `thinkingLabel` survive a preset change. `/tool-display reset` still restores full factory defaults.
+
 ## [0.7.0] - 2026-11-04
 
 ### Security

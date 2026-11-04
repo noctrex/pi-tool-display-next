@@ -10,7 +10,7 @@ import {
 } from "./presets.js";
 import { shortenPath } from "./render-utils.js";
 import type { InspectorSettingItem } from "./settings-inspector-modal.js";
-import { type ToolDisplayConfig } from "./types.js";
+import { type ToolDisplayConfig, BUILT_IN_TOOL_OVERRIDE_NAMES } from "./types.js";
 
 interface ToolDisplayConfigController {
 	getConfig(): ToolDisplayConfig;
@@ -27,6 +27,10 @@ interface ModalOverlayOptions {
 
 const PREVIEW_LINE_VALUES = ["4", "8", "12", "20", "40"] as const;
 const BASH_PREVIEW_LINE_VALUES = ["0", "5", "10", "20", "40"] as const;
+const BASH_COMMAND_MAX_CHARS_VALUES = ["0", "120", "200", "400", "800", "2000"] as const;
+const EXPANDED_PREVIEW_MAX_LINES_VALUES = ["0", "500", "1000", "2000", "4000", "8000", "20000"] as const;
+const DIFF_SPLIT_MIN_WIDTH_VALUES = ["70", "90", "120", "160", "200", "240"] as const;
+const DIFF_COLLAPSED_LINES_VALUES = ["4", "8", "12", "24", "48", "96", "240"] as const;
 const PRESET_COMMAND_HINT = TOOL_DISPLAY_PRESETS.join("|");
 
 function toOnOff(value: boolean): string {
@@ -83,14 +87,14 @@ function buildAdvancedNotes(
 ): string[] {
 	const notes = [
 		...extra,
-		"Manual JSON edits also expose registerToolOverrides.*, expandedPreviewMaxLines, diffSplitMinWidth, diffCollapsedLines, diffIndicatorMode, and diffWordWrap.",
+		"customToolOverrides stays a manual JSON edit: it maps arbitrary tool names to per-tool claim and output settings.",
 		`Tool ownership is currently ${toolOwnershipSummary(config)} and still applies after /reload.`,
 		`Truncation hints are ${toOnOff(config.showTruncationHints)}${capabilities.hasRtkOptimizer ? `; RTK hints are ${toOnOff(config.showRtkCompactionHints)}.` : "."}`,
 	];
 	return notes;
 }
 
-function buildInspectorSettings(
+export function buildInspectorSettings(
 	config: ToolDisplayConfig,
 	capabilities: ToolDisplayCapabilities,
 ): InspectorSettingItem[] {
@@ -104,7 +108,7 @@ function buildInspectorSettings(
 			inspectorTitle: "Preset Profile",
 			inspectorSummary: [
 				"Determines the overall verbosity and layout of the agent's tool output.",
-				"Choosing a preset applies a coherent profile across read, search, MCP, bash, and diff display settings.",
+				"Choosing a preset applies a coherent profile across the output modes and line budgets. All other settings are preserved.",
 			],
 			inspectorOptions: [
 				"opencode — strict inline-only tool output",
@@ -118,6 +122,42 @@ function buildInspectorSettings(
 			inspectorPath: configPath,
 			searchTerms: ["verbosity", "profile", "layout", "custom", ...TOOL_DISPLAY_PRESETS],
 		},
+		{
+			id: "enabled",
+			label: "Tool display",
+			currentValue: toOnOff(config.enabled),
+			values: ["on", "off"],
+			inspectorTitle: "Tool Display",
+			inspectorSummary: [
+				"Master switch for the extension's renderers.",
+				"Turning it off hands every tool back to Pi's native rendering without unregistering the extension.",
+			],
+			inspectorOptions: [
+				"on — extension renderers draw claimed tools",
+				"off — Pi's native renderers draw everything",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["enable", "disable", "master", "switch", "extension"],
+		},
+		...BUILT_IN_TOOL_OVERRIDE_NAMES.map(
+			(tool): InspectorSettingItem => ({
+				id: `registerToolOverrides.${tool}`,
+				label: `Claim ${tool} tool`,
+				currentValue: toOnOff(config.registerToolOverrides[tool]),
+				values: ["on", "off"],
+				inspectorTitle: `Claim ${tool} Tool`,
+				inspectorSummary: [
+					"Controls whether this extension replaces Pi's native renderer for the tool.",
+					"Off restores stock Pi rendering for that tool only; the tool itself keeps working either way.",
+				],
+				inspectorOptions: [
+					"on — this extension draws the tool",
+					"off — stock Pi draws the tool",
+				],
+				inspectorPath: configPath,
+				searchTerms: ["claim", "override", "native", "renderer", tool],
+			}),
+		),
 		{
 			id: "readOutputMode",
 			label: "Read tool output",
@@ -287,7 +327,7 @@ function buildInspectorSettings(
 				"unified — force a single-column diff",
 			],
 			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
-				"Manual JSON tuning exposes diffSplitMinWidth, diffCollapsedLines, diffIndicatorMode, and diffWordWrap for more aggressive diff control.",
+				"diffSplitMinWidth, diffCollapsedLines, and diffWordWrap have their own entries in this settings list for more aggressive diff control.",
 			]),
 			inspectorPath: configPath,
 			searchTerms: ["diff", "edit", "write", "split", "unified", "auto"],
@@ -333,25 +373,319 @@ function buildInspectorSettings(
 			inspectorPath: configPath,
 			searchTerms: ["user", "message", "box", "prompt", "native"],
 		},
+		{
+			id: "thinkingLabel",
+			label: "Thinking label",
+			currentValue: toOnOff(config.thinkingLabel),
+			values: ["on", "off"],
+			inspectorTitle: "Thinking Label",
+			inspectorSummary: [
+				"Prefixes thinking blocks with a visible label in the transcript.",
+				"The label is applied at render time only; stored messages and model context keep clean content.",
+			],
+			inspectorOptions: [
+				"on — thinking blocks render with a Thinking: prefix",
+				"off — thinking blocks render as the model wrote them",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["thinking", "label", "reasoning", "prefix"],
+		},
+		{
+			id: "strictAnsiSanitization",
+			label: "Strict ANSI sanitization",
+			currentValue: toOnOff(config.strictAnsiSanitization),
+			values: ["on", "off"],
+			inspectorTitle: "Strict ANSI Sanitization",
+			inspectorSummary: [
+				"Controls how untrusted tool arguments and output are sanitized before rendering.",
+				"Off keeps foreground colors from external programs for a richer display; on strips every escape sequence and control byte, matching stock Pi.",
+			],
+			inspectorOptions: [
+				"off — color-rich rendering; escape sequences other than background colors pass through (accepted risk)",
+				"on — full escape and control-character strip; external tool colors are removed",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Terminal effects such as title changes, clipboard writes, or cursor movement cannot be caused by tool content while strict mode is on.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["ansi", "escape", "sanitize", "security", "colors", "strict", "clipboard"],
+		},
+		{
+			id: "allowExternalDiffPreviews",
+			label: "External diff previews",
+			currentValue: toOnOff(config.allowExternalDiffPreviews),
+			values: ["on", "off"],
+			inspectorTitle: "External Diff Previews",
+			inspectorSummary: [
+				"Allows pending-edit diff previews for paths outside the current workspace.",
+				"Preview reads are canonicalized through realpath and capped at 1 MB regardless of this setting.",
+			],
+			inspectorOptions: [
+				"off — previews only for files inside the workspace",
+				"on — previews also for absolute paths outside the workspace",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["diff", "preview", "external", "workspace", "path"],
+		},
+		{
+			id: "bashIntentMode",
+			label: "Bash intent header",
+			currentValue: config.bashIntentMode,
+			values: ["off", "render", "render-and-instruct"],
+			inspectorTitle: "Bash Intent Header",
+			inspectorSummary: [
+				"Renders leading '# intent:' / '# tool:' comments as the bash call header.",
+				"Render-and-instruct also asks the model to write those comments through the system prompt.",
+			],
+			inspectorOptions: [
+				"off — no intent header",
+				"render — show the header when the command carries intent comments",
+				"render-and-instruct — show the header and instruct the model to use it",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["bash", "intent", "header", "comment", "tool"],
+		},
+		{
+			id: "bashIntentShowCommand",
+			label: "Bash intent command",
+			currentValue: toOnOff(config.bashIntentShowCommand),
+			values: ["on", "off"],
+			inspectorTitle: "Bash Intent Command",
+			inspectorSummary: [
+				"Appends a one-line command summary to the bash intent header when it is collapsed.",
+				"Only applies when the bash intent header is enabled.",
+			],
+			inspectorOptions: [
+				"on — intent header carries the command suffix",
+				"off — intent header shows the label only",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["bash", "intent", "command", "suffix", "collapsed"],
+		},
+		{
+			id: "bashCommandMaxChars",
+			label: "Bash command max chars",
+			currentValue: String(config.bashCommandMaxChars),
+			values: BASH_COMMAND_MAX_CHARS_VALUES,
+			inspectorTitle: "Bash Command Max Chars",
+			inspectorSummary: [
+				"Truncates the displayed bash command to this many characters on one line.",
+				"Accepted manual range: 0 to 2000. 0 disables truncation.",
+			],
+			inspectorOptions: [
+				"0 — show the full command",
+				"120 to 2000 — truncate long commands with an ellipsis",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["bash", "command", "chars", "truncate", "length"],
+		},
+		{
+			id: "expandedPreviewMaxLines",
+			label: "Expanded preview cap",
+			currentValue: String(config.expandedPreviewMaxLines),
+			values: EXPANDED_PREVIEW_MAX_LINES_VALUES,
+			inspectorTitle: "Expanded Preview Cap",
+			inspectorSummary: [
+				"Bounds how many lines an expanded preview can show across read, search, MCP, bash, and codemode output.",
+				"Accepted manual range: 0 to 20000. 0 disables the cap.",
+			],
+			inspectorOptions: [
+				"0 — no cap when expanded",
+				"500 to 20000 — cap expanded previews at this many lines",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["expanded", "preview", "cap", "lines", "limit"],
+		},
+		{
+			id: "diffSplitMinWidth",
+			label: "Diff split min width",
+			currentValue: String(config.diffSplitMinWidth),
+			values: DIFF_SPLIT_MIN_WIDTH_VALUES,
+			inspectorTitle: "Diff Split Min Width",
+			inspectorSummary: [
+				"Minimum terminal width before the auto diff layout prefers side-by-side split columns.",
+				"Accepted manual range: 70 to 240 columns.",
+			],
+			inspectorOptions: [
+				"Lower values switch to split earlier",
+				"Higher values keep single-column diffs until the pane is wider",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["diff", "split", "width", "auto", "columns"],
+		},
+		{
+			id: "diffCollapsedLines",
+			label: "Diff collapsed lines",
+			currentValue: String(config.diffCollapsedLines),
+			values: DIFF_COLLAPSED_LINES_VALUES,
+			inspectorTitle: "Diff Collapsed Lines",
+			inspectorSummary: [
+				"How many diff body lines render before the diff collapses behind its frame.",
+				"Accepted manual range: 4 to 240 lines.",
+			],
+			inspectorOptions: [
+				"Lower values keep diffs compact",
+				"Higher values show more of large diffs inline",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["diff", "collapsed", "lines", "frame"],
+		},
+		{
+			id: "diffWordWrap",
+			label: "Diff word wrap",
+			currentValue: toOnOff(config.diffWordWrap),
+			values: ["on", "off"],
+			inspectorTitle: "Diff Word Wrap",
+			inspectorSummary: [
+				"Wraps long diff lines at the pane width instead of truncating them.",
+				"Wrapped continuation rows keep the line's change indicator styling.",
+			],
+			inspectorOptions: [
+				"on — wrap long diff lines",
+				"off — truncate long diff lines at the pane width",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["diff", "wrap", "word", "truncate", "long"],
+		},
+		{
+			id: "showTruncationHints",
+			label: "Truncation hints",
+			currentValue: toOnOff(config.showTruncationHints),
+			values: ["on", "off"],
+			inspectorTitle: "Truncation Hints",
+			inspectorSummary: [
+				"Shows truncation indicators on compacted output so you can tell when content was cut.",
+			],
+			inspectorOptions: [
+				"on — append truncated markers to compacted summaries",
+				"off — keep summaries clean without truncation markers",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["truncation", "hints", "markers", "compacted"],
+		},
 	);
+
+	if (capabilities.hasRtkOptimizer) {
+		items.push({
+			id: "showRtkCompactionHints",
+			label: "RTK compaction hints",
+			currentValue: toOnOff(config.showRtkCompactionHints),
+			values: ["on", "off"],
+			inspectorTitle: "RTK Compaction Hints",
+			inspectorSummary: [
+				"Shows which compaction techniques the RTK optimizer applied to tool output.",
+				"This entry appears only when RTK is detected in the current Pi session.",
+			],
+			inspectorOptions: [
+				"on — annotate summaries with RTK compaction details",
+				"off — no RTK annotations",
+			],
+			inspectorPath: configPath,
+			searchTerms: ["rtk", "compaction", "hints", "optimizer"],
+		});
+	}
 
 	return items;
 }
 
-function applyPreset(preset: ToolDisplayPreset): ToolDisplayConfig {
-	return getToolDisplayPresetConfig(preset);
+function applyPreset(current: ToolDisplayConfig, preset: ToolDisplayPreset): ToolDisplayConfig {
+	// Presets switch the verbosity profile only: the output modes and the two
+	// line budgets they define. Everything else the user configured (master
+	// switch, tool claims, intent, diff tuning, security posture, logging)
+	// survives a preset switch; /tool-display reset restores factory defaults.
+	const profile = getToolDisplayPresetConfig(preset);
+	return {
+		...current,
+		readOutputMode: profile.readOutputMode,
+		searchOutputMode: profile.searchOutputMode,
+		mcpOutputMode: profile.mcpOutputMode,
+		codemodeOutputMode: profile.codemodeOutputMode,
+		bashOutputMode: profile.bashOutputMode,
+		previewLines: profile.previewLines,
+		bashCollapsedLines: profile.bashCollapsedLines,
+	};
 }
 
-function applySetting(config: ToolDisplayConfig, id: string, value: string): ToolDisplayConfig {
+export function applySetting(config: ToolDisplayConfig, id: string, value: string): ToolDisplayConfig {
 	switch (id) {
 		case "preset": {
 			const parsed = parseToolDisplayPreset(value);
-			return parsed ? applyPreset(parsed) : config;
+			return parsed ? applyPreset(config, parsed) : config;
 		}
+		case "enabled":
+			return {
+				...config,
+				enabled: value === "on",
+			};
 		case "enableNativeUserMessageBox":
 			return {
 				...config,
 				enableNativeUserMessageBox: value === "on",
+			};
+		case "thinkingLabel":
+			return {
+				...config,
+				thinkingLabel: value === "on",
+			};
+		case "strictAnsiSanitization":
+			return {
+				...config,
+				strictAnsiSanitization: value === "on",
+			};
+		case "allowExternalDiffPreviews":
+			return {
+				...config,
+				allowExternalDiffPreviews: value === "on",
+			};
+		case "bashIntentShowCommand":
+			return {
+				...config,
+				bashIntentShowCommand: value === "on",
+			};
+		case "diffWordWrap":
+			return {
+				...config,
+				diffWordWrap: value === "on",
+			};
+		case "showTruncationHints":
+			return {
+				...config,
+				showTruncationHints: value === "on",
+			};
+		case "showRtkCompactionHints":
+			return {
+				...config,
+				showRtkCompactionHints: value === "on",
+			};
+		case "debug":
+			return {
+				...config,
+				debug: value === "on",
+			};
+		case "bashIntentMode":
+			return {
+				...config,
+				bashIntentMode: value as ToolDisplayConfig["bashIntentMode"],
+			};
+		case "bashCommandMaxChars":
+			return {
+				...config,
+				bashCommandMaxChars: parseNumber(value, config.bashCommandMaxChars),
+			};
+		case "expandedPreviewMaxLines":
+			return {
+				...config,
+				expandedPreviewMaxLines: parseNumber(value, config.expandedPreviewMaxLines),
+			};
+		case "diffSplitMinWidth":
+			return {
+				...config,
+				diffSplitMinWidth: parseNumber(value, config.diffSplitMinWidth),
+			};
+		case "diffCollapsedLines":
+			return {
+				...config,
+				diffCollapsedLines: parseNumber(value, config.diffCollapsedLines),
 			};
 		case "readOutputMode":
 			return {
@@ -395,8 +729,21 @@ function applySetting(config: ToolDisplayConfig, id: string, value: string): Too
 				...config,
 				diffIndicatorMode: value as ToolDisplayConfig["diffIndicatorMode"],
 			};
-		default:
+		default: {
+			if (id.startsWith("registerToolOverrides.")) {
+				const tool = id.slice("registerToolOverrides.".length);
+				if ((BUILT_IN_TOOL_OVERRIDE_NAMES as readonly string[]).includes(tool)) {
+					return {
+						...config,
+						registerToolOverrides: {
+							...config.registerToolOverrides,
+							[tool]: value === "on",
+						},
+					};
+				}
+			}
 			return config;
+		}
 	}
 }
 
@@ -504,7 +851,7 @@ export function handleToolDisplayArgs(args: string, ctx: ExtensionCommandContext
 			return true;
 		}
 
-		controller.setConfig(getToolDisplayPresetConfig(preset), ctx);
+		controller.setConfig(applyPreset(controller.getConfig(), preset), ctx);
 		ctx.ui.notify(`Tool display preset set to ${preset}.`, "info");
 		return true;
 	}

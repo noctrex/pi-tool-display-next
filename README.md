@@ -46,7 +46,7 @@ Not on npm yet - do not look for it there. Do NOT install `npm:pi-tool-display` 
 /tool-display preset <name>    # opencode | balanced | verbose
 ```
 
-Modal controls: preset, read / search / MCP / codemode output modes, preview line count, bash output mode and collapsed lines, diff layout and indicator mode, native user message box toggle. MCP and RTK controls only appear when the environment supports them.
+Modal controls cover every setting: the extension master switch, per-tool claim toggles, all output modes, preview and line budgets, bash intent and command truncation, diff layout, width, collapsing and wrapping, security toggles (`strictAnsiSanitization`, `allowExternalDiffPreviews`), thinking label, user message box, truncation hints, and debug logging. Only `customToolOverrides` stays a manual JSON edit because it maps arbitrary tool names. MCP and RTK controls only appear when the environment supports them. Presets switch the verbosity profile only; every other setting survives a preset change, and `reset` restores factory defaults.
 
 ## Presets
 
