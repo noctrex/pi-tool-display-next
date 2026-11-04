@@ -207,3 +207,61 @@ test("bash intent keys survive a save/load round trip", () => {
     assert.equal(loaded.config.bashIntentShowCommand, true);
   });
 });
+
+test("normalizeToolDisplayConfig defaults strictAnsiSanitization and debug to false", () => {
+  const normalized = normalizeToolDisplayConfig({});
+  assert.equal(normalized.strictAnsiSanitization, false);
+  assert.equal(normalized.debug, false);
+});
+
+test("normalizeToolDisplayConfig normalizes strictAnsiSanitization and debug through toBoolean", () => {
+  const normalized = normalizeToolDisplayConfig({
+    strictAnsiSanitization: true,
+    debug: "yes" as unknown as boolean,
+  });
+  assert.equal(normalized.strictAnsiSanitization, true);
+  assert.equal(normalized.debug, false);
+});
+
+test("settings saves preserve the debug and strictAnsiSanitization flags", () => {
+  const configFile = join(tmpdir(), `pi-tool-display-next-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  try {
+    const saved = saveToolDisplayConfig(
+      normalizeToolDisplayConfig({ debug: true, strictAnsiSanitization: true }),
+      configFile,
+    );
+    assert.equal(saved.success, true);
+
+    const loaded = loadToolDisplayConfig(configFile);
+    assert.equal(loaded.config.debug, true);
+    assert.equal(loaded.config.strictAnsiSanitization, true);
+  } finally {
+    rmSync(configFile, { force: true });
+  }
+});
+
+test("customToolOverrides skips prototype-shaping keys instead of rebinding the record", () => {
+  // JSON.parse surfaces `__proto__` as an own key, which is the path a
+  // hand-edited config file takes through loadToolDisplayConfig.
+  const raw = JSON.parse(
+    '{"customToolOverrides":{"__proto__":{"enabled":true}," unsafe tool ":{"enabled":true},"real_tool":{"enabled":true}}}',
+  );
+  const normalized = normalizeToolDisplayConfig(raw);
+
+  // The __proto__ key never becomes an entry and never rebinds the prototype;
+  // other names are trimmed as usual.
+  assert.equal(Object.prototype.isPrototypeOf(normalized.customToolOverrides), true);
+  assert.deepEqual(Object.keys(normalized.customToolOverrides), ["unsafe tool", "real_tool"]);
+});
+
+test("customToolOverrides lookups do not resolve inherited members", () => {
+  const raw = JSON.parse(
+    '{"customToolOverrides":{"__proto__":{"enabled":true,"kind":"mcp","outputMode":"preview"}}}',
+  );
+  const normalized = normalizeToolDisplayConfig(raw);
+
+  // A tool literally named after a record member must not resolve against the
+  // rebound prototype.
+  const lookup = (normalized.customToolOverrides as Record<string, unknown>)["enabled"];
+  assert.equal(lookup, undefined);
+});

@@ -490,6 +490,30 @@ test("normalizeLine preserves hyperlinks (OSC 8) while stripping OSC 133", () =>
   assert.equal(result, hyperlink);
 });
 
+test("normalizeLine downgrades non-https OSC 8 hyperlinks to their label text", () => {
+  const closer = "\x1b]8;;\x1b\\";
+  // A label that hides a non-https target is a phishing vector in pasted
+  // content; only the visible label (and the inert closer) survives.
+  const httpLink = `\x1b]8;;http://evil.example\x1b\\settings.json${closer}`;
+  assert.equal(normalizeUserMessageContentLine(httpLink), `settings.json${closer}`);
+
+  const fileLink = `\x1b]8;;file:///etc/passwd\x1b\\passwd${closer}`;
+  assert.equal(normalizeUserMessageContentLine(fileLink), `passwd${closer}`);
+
+  const noScheme = `\x1b]8;;evil.example\x1b\\click${closer}`;
+  assert.equal(normalizeUserMessageContentLine(noScheme), `click${closer}`);
+});
+
+test("normalizeLine keeps OSC 8 closers after a downgraded opener", () => {
+  const closer = "\x1b]8;;\x1b\\";
+  const mixed = `\x1b]8;;http://a\x1b\\x${closer} \x1b]8;;https://b\x1b\\y${closer}`;
+  // The http opener is stripped, its closer is inert, the https link survives.
+  assert.equal(
+    normalizeUserMessageContentLine(mixed),
+    `x${closer} \x1b]8;;https://b\x1b\\y${closer}`,
+  );
+});
+
 // ===========================================================================
 // addUserMessageVerticalPadding edge cases
 // ===========================================================================

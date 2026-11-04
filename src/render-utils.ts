@@ -1,7 +1,26 @@
 import { homedir } from "node:os";
-import { sanitizeAnsiForThemedOutput } from "./ansi-utils.js";
+import { sanitizeAnsiForThemedOutput, sanitizeUntrustedText, type UntrustedTextSanitizer } from "./ansi-utils.js";
+import type { ToolDisplayConfig } from "./types.js";
 
 export { sanitizeAnsiForThemedOutput };
+
+/**
+ * Pick the content-hygiene sanitizer for untrusted tool arguments and results.
+ *
+ * Default (strictAnsiSanitization: false): keep foreground SGR colors from
+ * tool output for a richer display; backgrounds are still stripped. Escape
+ * sequences other than SGR pass through, which is the accepted risk of the
+ * color-rich mode.
+ *
+ * Strict (strictAnsiSanitization: true): strip every escape sequence and
+ * control byte, matching stock Pi's terminal hygiene. Tool output colors from
+ * external programs are removed.
+ */
+export function resolveUntrustedTextSanitizer(
+  config: Pick<ToolDisplayConfig, "strictAnsiSanitization">,
+): UntrustedTextSanitizer {
+  return config.strictAnsiSanitization ? sanitizeUntrustedText : sanitizeAnsiForThemedOutput;
+}
 
 interface TextLikeContent {
   type: string;

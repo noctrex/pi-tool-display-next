@@ -343,3 +343,113 @@ test("sanitizeAnsiForThemedOutput handles null/undefined gracefully at runtime",
 test("sanitizeAnsiForThemedOutput throws for non-string input at runtime", () => {
 	assert.throws(() => sanitizeAnsiForThemedOutput(42 as unknown as string), /includes/);
 });
+
+// ─── sanitizeUntrustedText: strict content-hygiene boundary ────────────────
+
+import { sanitizeUntrustedText } from "../src/ansi-utils.ts";
+import { stripAnsi as vendoredStripAnsi } from "../src/vendored/ansi.ts";
+
+const ESC = "\x1b";
+
+test("sanitizeUntrustedText removes OSC 52 clipboard sequences with BEL and ST terminators", () => {
+	assert.equal(sanitizeUntrustedText(`x${ESC}]52;c;Zm9v\x07y`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}]52;c;Zm9v${ESC}\\y`), "xy");
+});
+
+test("sanitizeUntrustedText removes OSC 8 hyperlinks", () => {
+	assert.equal(
+		sanitizeUntrustedText(`x${ESC}]8;;https://example.com${ESC}\\link${ESC}]8;;${ESC}\\y`),
+		"xlinky",
+	);
+});
+
+test("sanitizeUntrustedText removes window-title OSC 0 and OSC 2 sequences", () => {
+	assert.equal(sanitizeUntrustedText(`x${ESC}]0;spoofed\x07y`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}]2;spoofed${ESC}\\y`), "xy");
+});
+
+test("sanitizeUntrustedText removes non-SGR CSI sequences including ESC[?25l", () => {
+	assert.equal(sanitizeUntrustedText(`x${ESC}[?25ly`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}[2Jy`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}[10;5Hy`), "xy");
+});
+
+test("sanitizeUntrustedText removes 8-bit CSI introducers", () => {
+	assert.equal(sanitizeUntrustedText("x\u009b31my"), "xy");
+});
+
+test("sanitizeUntrustedText removes SGR sequences including foreground colors", () => {
+	assert.equal(sanitizeUntrustedText(`x${ESC}[31mred${ESC}[0my`), "xredy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}[1;34mblue${ESC}[0my`), "xbluey");
+});
+
+test("sanitizeUntrustedText replaces bare C0 controls with spaces, keeping newlines and tabs", () => {
+	assert.equal(sanitizeUntrustedText("x\ry"), "x y");
+	assert.equal(sanitizeUntrustedText("x\x07y"), "x y");
+	assert.equal(sanitizeUntrustedText("x\x08y"), "x y");
+	assert.equal(sanitizeUntrustedText("a\nb"), "a\nb");
+	assert.equal(sanitizeUntrustedText("a\tb"), "a\tb");
+});
+
+test("sanitizeUntrustedText removes C1 controls", () => {
+	assert.equal(sanitizeUntrustedText("x\u0085y"), "x y");
+	assert.equal(sanitizeUntrustedText("x\u009fy"), "x y");
+});
+
+test("sanitizeUntrustedText removes DCS, APC, and PM sequences with their payloads", () => {
+	assert.equal(sanitizeUntrustedText(`x${ESC}Pqpayload${ESC}\\y`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}_payload\x07y`), "xy");
+	assert.equal(sanitizeUntrustedText(`x${ESC}^pm${ESC}\\y`), "xy");
+});
+
+test("sanitizeUntrustedText leaves plain text untouched", () => {
+	assert.equal(sanitizeUntrustedText("plain text 123"), "plain text 123");
+	assert.equal(sanitizeUntrustedText(""), "");
+});
+
+test("regression gate: no ESC or C1 byte survives any documented payload", () => {
+	const ST = ESC + "\\";
+	const payloads = [
+		`${ESC}]52;c;Zm9v\x07`,
+		`${ESC}]8;;https://x${ST}label${ESC}]8;;${ST}`,
+		`${ESC}[?25l`,
+		"\r",
+		"\u009b31m",
+		"\u0085",
+		`${ESC}]0;title\x07`,
+		`${ESC}Pqdata${ST}`,
+		`${ESC}[31m`,
+	];
+	for (const payload of payloads) {
+		const result = sanitizeUntrustedText(`a${payload}b`);
+		assert.equal(result.includes(ESC), false, `ESC survived: ${JSON.stringify(payload)}`);
+		assert.equal(
+			/[\u0080-\u009f]/.test(result),
+			false,
+			`C1 survived: ${JSON.stringify(payload)}`,
+		);
+	}
+});
+
+test("vendored stripAnsi keeps non-ANSI text and only fires on ESC or 8-bit CSI", () => {
+	assert.equal(vendoredStripAnsi("plain"), "plain");
+	assert.equal(vendoredStripAnsi(`${ESC}[31mx`), "x");
+});
+
+// ─── resolveUntrustedTextSanitizer: strict-mode gate ───────────────────────
+
+import { resolveUntrustedTextSanitizer } from "../src/render-utils.ts";
+
+test("resolveUntrustedTextSanitizer defaults to the color-preserving sanitizer", () => {
+	const sanitize = resolveUntrustedTextSanitizer({ strictAnsiSanitization: false });
+	// Foreground colors from untrusted content survive in the default mode.
+	assert.equal(sanitize(`x${ESC}[31mred y`), `x${ESC}[31mred y`);
+	// Background parameters are still stripped.
+	assert.equal(sanitize(`x${ESC}[41my`), "xy");
+});
+
+test("resolveUntrustedTextSanitizer returns the full strip when strict mode is on", () => {
+	const sanitize = resolveUntrustedTextSanitizer({ strictAnsiSanitization: true });
+	assert.equal(sanitize(`x${ESC}[31mred${ESC}[0my`), "xredy");
+	assert.equal(sanitize(`x${ESC}]52;c;Zm9v\x07y`), "xy");
+});

@@ -79,9 +79,9 @@ test("entry point registers expected lifecycle handlers", () => {
   toolDisplayExtension(api);
 
   const eventNames = capturedHandlers.map((h) => h.event);
-  // Thinking-label handlers
-  assert.ok(eventNames.includes("message_update"), "message_update handler registered");
-  assert.ok(eventNames.includes("message_end"), "message_end handler registered");
+  // Thinking-label handlers: display labeling runs through a markdown
+  // transformer (no message mutation); the context handler stays as cleanup
+  // for sessions persisted by older versions.
   assert.ok(eventNames.includes("context"), "context handler registered");
   // Lifecycle handlers from index.ts directly
   assert.ok(eventNames.includes("session_start"), "session_start handler registered");

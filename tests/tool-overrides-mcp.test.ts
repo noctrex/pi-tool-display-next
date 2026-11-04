@@ -96,10 +96,17 @@ test("isMcpToolCandidate returns true when name is 'mcp'", () => {
 	assert.equal(isMcpToolCandidate({ name: "mcp", description: "unified gateway" }), true);
 });
 
-test("isMcpToolCandidate returns true when description contains whole word 'mcp' (case-insensitive)", () => {
-	assert.equal(isMcpToolCandidate({ name: "web_search", description: "MCP tool for web search" }), true);
-	assert.equal(isMcpToolCandidate({ name: "web_search", description: "mcp tool for web search" }), true);
-	assert.equal(isMcpToolCandidate({ name: "web_search", description: "An MCP-based search" }), true);
+test("isMcpToolCandidate ignores 'mcp' in the description; only structural evidence claims", () => {
+	// A description word match must not claim a tool: claimed tools have
+	// their output hidden by default, and a tool author controls descriptions.
+	assert.equal(isMcpToolCandidate({ name: "web_search", description: "MCP tool for web search" }), false);
+	assert.equal(isMcpToolCandidate({ name: "web_search", description: "mcp tool for web search" }), false);
+	assert.equal(isMcpToolCandidate({ name: "web_search", description: "An MCP-based search" }), false);
+});
+
+test("isMcpToolCandidate claims Pi's mcp__server__tool name convention", () => {
+	assert.equal(isMcpToolCandidate({ name: "mcp__filesystem__list_dir", parameters: {} }), true);
+	assert.equal(isMcpToolCandidate({ name: "mcp__weather__forecast" }), true);
 });
 
 test("isMcpToolCandidate returns false when description has 'mcp' substring but not whole word", () => {
@@ -110,10 +117,13 @@ test("isMcpToolCandidate returns false when description has 'mcp' substring but 
 });
 
 test("isMcpToolCandidate returns false for false positives (tool with 'mcp' in description not actually MCP)", () => {
-	// Tool named "mcpify" that mentions mcp in its description but isn't actually an MCP tool
-	// The word boundary in /\bmcp\b/i means "mcpm" and "mcpify" won't match
+	// Neither a description word match nor loose name shapes (single-underscore
+	// prefixes or _mcp suffixes) claim a tool that is not structurally MCP.
 	assert.equal(isMcpToolCandidate({ name: "mcpify", description: "Tool to mcpify your code" }), false);
-	assert.equal(isMcpToolCandidate({ name: "mcp_manager", description: "Manage mcp connections" }), true); // whole word
+	assert.equal(isMcpToolCandidate({ name: "mcp_manager", description: "Manage mcp connections" }), false);
+	assert.equal(isMcpToolCandidate({ name: "example_mcp", description: "An MCP example tool." }), false);
+	assert.equal(isMcpToolCandidate({ name: "ctx_summarize", description: "Context tool." }), false);
+	assert.equal(isMcpToolCandidate({ name: "server:tool", description: "Colon-named tool." }), false);
 });
 
 test("isMcpToolCandidate recognises pi-mcp-adapter direct tools through sourceInfo", () => {
@@ -194,17 +204,17 @@ test("MCP resolution never touches the tool object", () => {
 	assert.equal(mcpTool.promptSnippet, undefined, "prompt metadata untouched");
 });
 
-test("MCP-named tool without execute or parameters resolves renderers", () => {
+test("MCP-convention tool without execute or parameters resolves renderers", () => {
 	const stub = createExtensionApiStub([
 		{
-			name: "example_mcp",
-			description: "An MCP example tool for testing.",
+			name: "mcp__example__list",
+			description: "An example tool for testing.",
 		},
 	]);
 
 	registerToolDisplayOverrides(stub.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-	const renderers = claimRenderers(stub, "example_mcp");
+	const renderers = claimRenderers(stub, "mcp__example__list");
 	assert.equal(typeof renderers?.renderCall, "function");
 	assert.equal(typeof renderers?.renderResult, "function");
 });
@@ -219,11 +229,11 @@ test("unregistered MCP tool (resumed session, server not yet connected) still re
 	assert.equal(typeof renderers?.renderCall, "function", "unregistered proxy still claimed");
 });
 
-test("MCP tools with MCP descriptions resolve via getAllTools metadata", () => {
+test("MCP tools resolve via the mcp__ name convention in getAllTools metadata", () => {
 	const tools: RuntimeTool[] = [
-		{ name: "filesystem_list", description: "List files via MCP.", parameters: {}, execute: () => {} },
-		{ name: "db_query", description: "Query database via MCP.", parameters: {}, execute: () => {} },
-		{ name: "web_search", description: "Search via MCP.", parameters: {}, execute: () => {} },
+		{ name: "mcp__filesystem__list", description: "List files.", parameters: {}, execute: () => {} },
+		{ name: "mcp__db__query", description: "Query database.", parameters: {}, execute: () => {} },
+		{ name: "mcp__web__search", description: "Search.", parameters: {}, execute: () => {} },
 	];
 	const stub = createExtensionApiStub(tools);
 
@@ -231,7 +241,7 @@ test("MCP tools with MCP descriptions resolve via getAllTools metadata", () => {
 
 	for (const tool of tools) {
 		const renderers = claimRenderers(stub, tool.name);
-		assert.equal(typeof renderers?.renderCall, "function", `${tool.name} claimed by description heuristic`);
+		assert.equal(typeof renderers?.renderCall, "function", `${tool.name} claimed by name convention`);
 		assert.equal(typeof renderers?.renderResult, "function", `${tool.name} result claimed`);
 	}
 });

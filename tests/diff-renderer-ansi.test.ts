@@ -53,3 +53,68 @@ test("rgb foreground sequences with component value 49 do not trigger background
 	);
 });
 
+test("strict mode strips every escape payload from rendered diff lines", () => {
+	const ESC = "\x1b";
+	const hostile = `--- a/demo.ts\n+++ b/demo.ts\n@@ -0,0 +1 @@\n+const s = "${ESC}]52;c;Zm9v\x07${ESC}[?25l${ESC}[31mx";\n`;
+	const component = renderEditDiffResult(
+		{ diff: hostile },
+		{ expanded: false, filePath: "demo.ts" },
+		{
+			diffViewMode: "unified",
+			diffIndicatorMode: "bars",
+			diffSplitMinWidth: 80,
+			diffCollapsedLines: 24,
+			diffWordWrap: true,
+			strictAnsiSanitization: true,
+		} as any,
+		{
+			fg: (color: string, text: string): string => text,
+			bold: (text: string): string => text,
+		},
+		"",
+	);
+
+	const lines = renderRawInsideToolBox(component, 80);
+	// Untrusted payloads must be gone (theme stubs add no foreground styling),
+	// while the renderer's own row-background SGR legitimately remains.
+	assert.ok(
+		lines.every((line) => !line.includes(`${ESC}]52`) && !line.includes(`${ESC}[?25l`) && !line.includes(`${ESC}[31m`)),
+		`Untrusted escape payload survived strict diff rendering:\n${lines.join("\n")}`,
+	);
+	assert.ok(
+		someLineIncludes(lines, 'const s = "x"'),
+		"Visible diff content survives", 
+	);
+});
+
+function someLineIncludes(lines: string[], needle: string): boolean {
+	return lines.some((line) => line.includes(needle));
+}
+
+test("strict mode sanitizes the no-diff fallback text", () => {
+	const ESC = "\x1b";
+	const component = renderEditDiffResult(
+		{},
+		{ expanded: false, filePath: "demo.ts" },
+		{
+			diffViewMode: "unified",
+			diffIndicatorMode: "bars",
+			diffSplitMinWidth: 80,
+			diffCollapsedLines: 24,
+			diffWordWrap: true,
+			strictAnsiSanitization: true,
+		} as any,
+		{
+			fg: (color: string, text: string): string => text,
+			bold: (text: string): string => text,
+		},
+		`edit failed: ${ESC}]52;c;Zm9v\x07`,
+	);
+
+	const lines = renderRawInsideToolBox(component, 80);
+	assert.ok(
+		lines.every((line) => !line.includes(ESC)),
+		`ESC survived fallback text:\n${lines.join("\n")}`,
+	);
+});
+

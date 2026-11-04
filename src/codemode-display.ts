@@ -1,7 +1,8 @@
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component, type Keybinding } from "@earendil-works/pi-tui";
 import { isRecord } from "./tool-metadata.js";
-import { compactOutputLines, extractTextOutput, pluralize, previewLines, sanitizeAnsiForThemedOutput, splitLines } from "./render-utils.js";
+import { compactOutputLines, extractTextOutput, pluralize, previewLines, resolveUntrustedTextSanitizer, sanitizeAnsiForThemedOutput, splitLines } from "./render-utils.js";
+import type { UntrustedTextSanitizer } from "./ansi-utils.js";
 import type { ToolDisplayConfig } from "./types.js";
 
 /**
@@ -79,6 +80,7 @@ function renderOutputPreview(
 	limit: number,
 	theme: ThemeLike,
 	isError: boolean,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): Component {
 	const [first, ...rest] = result.content ?? [];
 	const content = first?.type === "text" && typeof first.text === "string" && SCRIPT_HEADER.test(first.text)
@@ -86,7 +88,7 @@ function renderOutputPreview(
 		: result.content ?? [];
 	const lines = compactOutputLines(splitLines(extractTextOutput({ content })), { expanded: false });
 	const color = isError ? "error" : "toolOutput";
-	const text = lines.map((line) => theme.fg(color, sanitizeAnsiForThemedOutput(line))).join("\n");
+	const text = lines.map((line) => theme.fg(color, sanitize(line))).join("\n");
 	const output = new Text(text, 0, 0);
 	return {
 		render(width) {
@@ -128,7 +130,7 @@ function countCodemodeCalls(details: unknown): CodemodeCallCounts {
 }
 
 export function codemodeRenderers(
-	getConfig: () => Pick<ToolDisplayConfig, "codemodeOutputMode" | "previewLines">,
+	getConfig: () => Pick<ToolDisplayConfig, "codemodeOutputMode" | "previewLines" | "strictAnsiSanitization">,
 	next: CodemodeNextRenderers,
 ): {
 	renderCall: (args: unknown, theme: ThemeLike, context: CodemodeCallRendererArgs) => unknown;
@@ -167,7 +169,7 @@ export function codemodeRenderers(
 				(next.renderResult?.({ ...result, content: [] }, options, theme, nativeContext) ?? new Text("", 0, 0)) as never,
 			);
 			if (config.codemodeOutputMode === "preview" && !options?.isPartial) {
-				container.addChild(renderOutputPreview(result, config.previewLines, theme, context?.isError === true));
+				container.addChild(renderOutputPreview(result, config.previewLines, theme, context?.isError === true, resolveUntrustedTextSanitizer(config)));
 			}
 			return container;
 		},

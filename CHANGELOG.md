@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-04
+
+### Security
+
+- Closed terminal escape-injection paths: untrusted tool arguments and results (bash command text and intent labels, search patterns, file paths, MCP proxy targets and hints, RTK technique lists, edit/write error and diff fallback text) now route through a configurable sanitizer before rendering. The default keeps foreground colors from tool output; `strictAnsiSanitization: true` strips every escape sequence and control byte, matching stock Pi's terminal hygiene. Sanitization is vendored (`src/vendored/ansi.ts`, chalk-derived, MIT) and covers CSI, OSC, DCS, SOS, PM, APC, 8-bit introducers, and all terminator forms.
+- MCP tool classification narrowed to structural evidence only: the `mcp__server__tool` name convention, MCP adapter `sourceInfo`, and MCP server parameter fields. A description merely mentioning MCP no longer claims and hides a tool's output.
+- Hidden read, search, and MCP results render a visible `output hidden` marker instead of an empty line, so compaction is never silent.
+- `customToolOverrides` entries named `__proto__`, `constructor`, or `prototype` are skipped, so a crafted config key can no longer rebind the record's prototype.
+
+### Changed
+
+- Thinking labels are applied at render time through `registerMarkdownTransformer` instead of mutating persisted assistant messages, so sessions store clean thinking content and provider-side integrity checks see unchanged text. The `context` handler remains as cleanup for sessions saved by older versions.
+- Debug logging is gated on the documented `debug` config flag (previously an inert pre-fork install-directory gate that could not be turned off) and the log is capped at 1 MB.
+- OSC 8 hyperlinks in the user message box are restricted to `https:` targets; any other scheme degrades to its visible label text.
+
+### Added
+
+- `strictAnsiSanitization` config flag (default `false`) for the opt-in full escape strip described above.
+
 ## [0.6.1] - 2026-11-03
 
 ### Fixed

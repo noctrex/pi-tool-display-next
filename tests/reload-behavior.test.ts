@@ -369,10 +369,10 @@ test("3: multiple consecutive bash render calls do not create duplicate timers",
 // ---------------------------------------------------------------------------
 
 test("4: MCP tools resolve renderers from the start, no session_start sweep needed", () => {
-  // isMcpToolCandidate checks for name==="mcp" or description matching \bmcp\b
+  // isMcpToolCandidate claims via the mcp__server__tool name convention
   const mcpTool: Record<string, unknown> = {
-    name: "weather",
-    description: "MCP weather tool for forecasts",
+    name: "mcp__weather__forecast",
+    description: "Weather forecasts",
     parameters: { type: "object", properties: {} },
     execute: () => "sunny",
   };
@@ -384,7 +384,7 @@ test("4: MCP tools resolve renderers from the start, no session_start sweep need
 
   registerToolDisplayOverrides(api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-  const resolved = capturedResolvers[0]("weather", () => undefined) as {
+  const resolved = capturedResolvers[0]("mcp__weather__forecast", () => undefined) as {
     renderCall?: unknown;
     renderResult?: unknown;
   };
@@ -394,10 +394,10 @@ test("4: MCP tools resolve renderers from the start, no session_start sweep need
 });
 
 test("4: fresh resolvers after reload resolve MCP renderers independently", () => {
-  // isMcpToolCandidate checks for name==="mcp" or description matching \bmcp\b
+  // isMcpToolCandidate claims via the mcp__server__tool name convention
   const mcpTool: Record<string, unknown> = {
-    name: "weather",
-    description: "MCP weather tool for forecasts",
+    name: "mcp__weather__forecast",
+    description: "Weather forecasts",
     parameters: { type: "object", properties: {} },
     execute: () => "sunny",
   };
@@ -405,13 +405,13 @@ test("4: fresh resolvers after reload resolve MCP renderers independently", () =
   // First runtime
   const first = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(first.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  const firstResolved = first.capturedResolvers[0]("weather", () => undefined) as { renderCall?: unknown };
+  const firstResolved = first.capturedResolvers[0]("mcp__weather__forecast", () => undefined) as { renderCall?: unknown };
   assert.equal(typeof firstResolved?.renderCall, "function", "claimed by first runtime resolver");
 
   // Reload: a NEW runtime installs a fresh resolver
   const second = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(second.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
-  const secondResolved = second.capturedResolvers[0]("weather", () => undefined) as { renderCall?: unknown };
+  const secondResolved = second.capturedResolvers[0]("mcp__weather__forecast", () => undefined) as { renderCall?: unknown };
   assert.equal(
     typeof secondResolved?.renderCall,
     "function",
@@ -543,40 +543,41 @@ test("6: /tool-display command is registered on first call and re-registered on 
 // 7. Thinking label cleanup
 // ---------------------------------------------------------------------------
 
-test("7: thinking label event handlers are registered on each extension call", () => {
+test("7: thinking label handlers are registered on each extension call", () => {
   const { api, capturedHandlers } = createApiStub();
 
-  // First call registers thinking label handlers
+  // First call registers thinking label handlers: display labeling runs
+  // through a markdown transformer, the context handler cleans up legacy
+  // sessions, and session_start recolors the hidden-thinking label.
   registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
   const handlerEvents = capturedHandlers.map((h) => h.event);
 
-  assert.ok(handlerEvents.includes("message_update"), "message_update registered");
-  assert.ok(handlerEvents.includes("message_end"), "message_end registered");
   assert.ok(handlerEvents.includes("context"), "context registered");
+  assert.ok(handlerEvents.includes("session_start"), "session_start registered");
+  assert.ok(
+    !handlerEvents.includes("message_update"),
+    "message_update is never mutated for labeling",
+  );
+  assert.ok(
+    !handlerEvents.includes("message_end"),
+    "message_end is never mutated for labeling",
+  );
 
   // Count handlers per event
-  const messageUpdateCount = capturedHandlers.filter(
-    (h) => h.event === "message_update",
-  ).length;
-  const messageEndCount = capturedHandlers.filter(
-    (h) => h.event === "message_end",
-  ).length;
   const contextCount = capturedHandlers.filter(
     (h) => h.event === "context",
   ).length;
 
-  assert.equal(messageUpdateCount, 1, "one message_update handler after first call");
-  assert.equal(messageEndCount, 1, "one message_end handler after first call");
   assert.equal(contextCount, 1, "one context handler after first call");
 
   // Second call with same API — duplicate prevention skips re-registration
   registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
-  const messageUpdateAfterSecond = capturedHandlers.filter(
-    (h) => h.event === "message_update",
+  const contextAfterSecond = capturedHandlers.filter(
+    (h) => h.event === "context",
   ).length;
 
   assert.equal(
-    messageUpdateAfterSecond,
+    contextAfterSecond,
     1,
     "duplicate prevention: no new handlers on second call",
   );
@@ -594,12 +595,12 @@ test("7: thinking label event handlers are registered on each extension call", (
 
   // Third call — guard was reset by reload, so handlers register again
   registerThinkingLabeling(api, () => ({ thinkingLabel: true }));
-  const messageUpdateAfterReload = capturedHandlers.filter(
-    (h) => h.event === "message_update",
+  const contextAfterReload = capturedHandlers.filter(
+    (h) => h.event === "context",
   ).length;
 
   assert.equal(
-    messageUpdateAfterReload,
+    contextAfterReload,
     2,
     "handlers re-register after reload resets the guard",
   );
@@ -852,7 +853,7 @@ test("11: registerToolDisplayOverrides creates fresh resolver state on each call
   // candidate cache, and write-capture state.
 
   const mcpTool: Record<string, unknown> = {
-    name: "server-tool",
+    name: "mcp__server__tool",
     description: "An MCP tool",
     parameters: {},
     execute: () => "result",
@@ -862,7 +863,7 @@ test("11: registerToolDisplayOverrides creates fresh resolver state on each call
   const stub1 = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(stub1.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-  const firstResolved = stub1.capturedResolvers[0]("server-tool", () => undefined) as {
+  const firstResolved = stub1.capturedResolvers[0]("mcp__server__tool", () => undefined) as {
     renderCall?: unknown;
   };
   assert.equal(
@@ -875,7 +876,7 @@ test("11: registerToolDisplayOverrides creates fresh resolver state on each call
   const stub2 = createExtensionApiStub([mcpTool]);
   registerToolDisplayOverrides(stub2.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
 
-  const secondResolved = stub2.capturedResolvers[0]("server-tool", () => undefined) as {
+  const secondResolved = stub2.capturedResolvers[0]("mcp__server__tool", () => undefined) as {
     renderCall?: unknown;
   };
   assert.ok(
@@ -999,10 +1000,9 @@ test("12: extension loads config fresh on each call (no stale cache)", () => {
 
 test("13: debug logger flush completes without errors", async () => {
   const logger = createToolDisplayDebugLogger({
-    configFile: "/dev/null/non-existent-config.json",
+    isDebugEnabled: () => false,
     debugDir: "/tmp/non-existent-debug",
     debugLogFile: "/tmp/non-existent-debug/debug.log",
-    now: () => 0,
     createDate: () => new Date(0),
   });
 
@@ -1020,12 +1020,12 @@ test("13: debug logger can be created multiple times (simulating reload)", () =>
   // creating fresh instances is safe.
 
   const logger1 = createToolDisplayDebugLogger({
-    configFile: "/dev/null/non-existent.json",
+    isDebugEnabled: () => false,
   });
   logger1.log("from instance 1");
 
   const logger2 = createToolDisplayDebugLogger({
-    configFile: "/dev/null/non-existent.json",
+    isDebugEnabled: () => false,
   });
   logger2.log("from instance 2");
 

@@ -1,6 +1,10 @@
 import { ANSI_SGR_PATTERN, sanitizeAnsiForThemedOutput } from "./ansi-utils.js";
 
 const OSC_PROMPT_CONTROL_SEQUENCE_PATTERN = /\x1b\](?:133|633);[A-Z](?:;[^\x07\x1b]*)?(?:\x07|\x1b\\)/g;
+// OSC 8 hyperlinks: `ESC ] 8 ; params ; URI ST`. The URI is empty for the
+// closing half of a link pair.
+const OSC8_HYPERLINK_PATTERN = /\x1b\]8;[^;\x07\x1b]*;?([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC8_HTTPS_URI_PATTERN = /^https:/i;
 const USER_MESSAGE_BACKGROUND = "userMessageBg";
 const ANSI_BG_RESET = "\x1b[49m";
 const USER_MESSAGE_VERTICAL_PADDING_LINES = 1;
@@ -19,13 +23,28 @@ function stripOscPromptControlSequences(text: string): string {
     return text;
   }
 
-  // Strip prompt-control OSC sequences only. OSC 8 hyperlinks are intentionally
-  // preserved because they carry renderable terminal hyperlink metadata.
+  // Strip prompt-control OSC sequences only. OSC 8 hyperlinks are handled
+  // separately by stripUnsafeOsc8Hyperlinks.
   return text.replace(OSC_PROMPT_CONTROL_SEQUENCE_PATTERN, "");
 }
 
+/**
+ * Keep OSC 8 hyperlinks only when their target is an https: URL (or the empty
+ * closer). Any other scheme downgrades to the visible label text, so pasted
+ * content cannot phish with a label that hides a different target protocol.
+ */
+function stripUnsafeOsc8Hyperlinks(text: string): string {
+  if (!text || !text.includes("\x1b]8;")) {
+    return text;
+  }
+
+  return text.replace(OSC8_HYPERLINK_PATTERN, (sequence, uri: string) =>
+    uri === "" || OSC8_HTTPS_URI_PATTERN.test(uri) ? sequence : "",
+  );
+}
+
 function sanitizeUserMessageAnsi(text: string): string {
-  return sanitizeAnsiForThemedOutput(stripOscPromptControlSequences(text));
+  return sanitizeAnsiForThemedOutput(stripUnsafeOsc8Hyperlinks(stripOscPromptControlSequences(text)));
 }
 
 export function applyUserMessageBackground(

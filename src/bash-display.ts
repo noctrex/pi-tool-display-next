@@ -1,4 +1,5 @@
 import { Text } from "@earendil-works/pi-tui";
+import { sanitizeAnsiForThemedOutput, type UntrustedTextSanitizer } from "./ansi-utils.js";
 import { extractProgramName } from "./bash-intent.js";
 import { registerCleanup, registerTimer } from "./disposable.js";
 import { getModalIcons } from "./modal-icons.js";
@@ -221,14 +222,18 @@ interface BashIntentRenderOptions {
 	showCommand?: boolean;
 }
 
-function buildCommandDisplay(args: BashCallArgs, maxCommandChars?: number): string {
+function buildCommandDisplay(
+	args: BashCallArgs,
+	maxCommandChars: number | undefined,
+	sanitize: UntrustedTextSanitizer,
+): string {
 	const command =
 		typeof args.command === "string" && args.command.trim().length > 0
-			? truncateCommand(args.command, maxCommandChars ?? 0)
+			? truncateCommand(sanitize(args.command), maxCommandChars ?? 0)
 			: "...";
 	const prefix =
 		typeof args.commandPrefix === "string" && args.commandPrefix.trim().length > 0
-			? args.commandPrefix.trim()
+			? sanitize(args.commandPrefix.trim())
 			: "";
 	return prefix ? `${prefix} ${command}` : command;
 }
@@ -238,18 +243,19 @@ function buildIntentHeader(
 	theme: BashCallRenderTheme,
 	options?: BashIntentRenderOptions,
 	expanded?: boolean,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): string | undefined {
 	const intent = resolveIntentDisplay(args, options);
 	if (!intent) {
 		return undefined;
 	}
 
-	const stripped = (intent.strippedCommand ?? "").trim();
+	const stripped = sanitize((intent.strippedCommand ?? "").trim());
 	// Prefer the agent's own label; otherwise the program is all the command can
 	// tell us without guessing.
-	const label = intent.tool ?? extractProgramName(stripped || args.command || "");
+	const label = sanitize(intent.tool ?? extractProgramName(stripped || args.command || ""));
 	const separator = ` ${theme.fg("muted", "·")} `;
-	const intentText = theme.fg("accent", intent.intent);
+	const intentText = theme.fg("accent", sanitize(intent.intent));
 
 	// Without a label the icon stays but the separator goes, so the header never
 	// renders a dangling icon-separator.
@@ -277,14 +283,15 @@ function buildBashCallText(
 	spinnerFrame?: string,
 	elapsedMs?: number,
 	maxCommandChars?: number,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): string {
-	const commandDisplay = buildCommandDisplay(args, maxCommandChars);
-	const intentHeader = buildIntentHeader(args, theme, intentOptions, expanded);
+	const commandDisplay = buildCommandDisplay(args, maxCommandChars, sanitize);
+	const intentHeader = buildIntentHeader(args, theme, intentOptions, expanded, sanitize);
 	const shellSuffix =
 		typeof args.shellPath === "string" &&
 		args.shellPath.trim().length > 0 &&
 		!isDefaultShellPath(args.shellPath)
-			? theme.fg("muted", ` [shell: ${args.shellPath}]`)
+			? theme.fg("muted", ` [shell: ${sanitize(args.shellPath)}]`)
 			: "";
 	const timeoutSuffix = args.timeout
 		? theme.fg("muted", ` (timeout ${args.timeout}s)`)
@@ -309,6 +316,7 @@ export function renderBashCall(
 	context: BashCallRenderContextLike,
 	maxCommandChars?: number,
 	intentOptions?: BashIntentRenderOptions,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): Text {
 	const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
 	const carrier = toStateCarrier(context.state);
@@ -318,7 +326,7 @@ export function renderBashCall(
 
 	if (!shouldSpin) {
 		stopSpinner(toolCallId, spinnerState);
-		text.setText(buildBashCallText(args, theme, intentOptions, context.expanded === true, undefined, undefined, maxCommandChars));
+		text.setText(buildBashCallText(args, theme, intentOptions, context.expanded === true, undefined, undefined, maxCommandChars, sanitize));
 		return text;
 	}
 
@@ -336,6 +344,7 @@ export function renderBashCall(
 						BASH_SPINNER_FRAMES[spinnerState.frameIndex],
 						Date.now() - (spinnerState.startedAt ?? Date.now()),
 						maxCommandChars,
+						sanitize,
 					),
 				);
 				context.invalidate?.();
@@ -354,6 +363,6 @@ export function renderBashCall(
 	const elapsedMs = spinnerState?.startedAt !== undefined
 		? Date.now() - spinnerState.startedAt
 		: undefined;
-	text.setText(buildBashCallText(args, theme, intentOptions, context.expanded === true, spinnerFrame, elapsedMs, maxCommandChars));
+	text.setText(buildBashCallText(args, theme, intentOptions, context.expanded === true, spinnerFrame, elapsedMs, maxCommandChars, sanitize));
 	return text;
 }

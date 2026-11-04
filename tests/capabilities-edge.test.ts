@@ -85,13 +85,18 @@ test("returns no capabilities when API is empty", () => {
 	});
 });
 
-test("detects MCP capability via isMcpToolCandidate with 'MCP' in description", () => {
+test("detects MCP capability via structural detection, not descriptions", () => {
+	// A description mentioning MCP must not drive capability detection; the
+	// mcp__ name convention must.
 	const api = createApiStub([
 		makeMcpTool("exa_web_search_exa", "Search the web. Direct MCP wrapper for 'exa:web_search_exa'."),
 	]);
-	const caps = detectToolDisplayCapabilities(api, "/tmp");
+	assert.equal(detectToolDisplayCapabilities(api, "/tmp").hasMcpTooling, false);
 
-	assert.equal(caps.hasMcpTooling, true);
+	const structural = createApiStub([
+		makeMcpTool("mcp__exa__web_search_exa", "Search the web."),
+	]);
+	assert.equal(detectToolDisplayCapabilities(structural, "/tmp").hasMcpTooling, true);
 });
 
 test("detects MCP capability via tool named 'mcp'", () => {
@@ -309,7 +314,7 @@ test("tools without description do not trigger false MCP detection", () => {
 	assert.equal(caps.hasMcpTooling, false);
 });
 
-test("tools with 'MCP' in the description but no MCP-like name are detected", () => {
+test("tools with 'MCP' in the description but no MCP-like name are not claimed", () => {
 	const api = createApiStub([
 		{
 			name: "random_tool",
@@ -319,7 +324,9 @@ test("tools with 'MCP' in the description but no MCP-like name are detected", ()
 	]);
 	const caps = detectToolDisplayCapabilities(api, "/tmp");
 
-	assert.equal(caps.hasMcpTooling, true);
+	// Structural detection only: a description mentioning MCP must not claim a
+	// tool, because claimed tools have their output hidden by default.
+	assert.equal(caps.hasMcpTooling, false);
 });
 
 test("tool with empty name string is handled safely", () => {

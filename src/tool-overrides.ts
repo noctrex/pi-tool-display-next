@@ -22,9 +22,11 @@ import {
   pluralize,
   previewLines,
   sanitizeAnsiForThemedOutput,
+  resolveUntrustedTextSanitizer,
   shortenPath,
   splitLines,
 } from "./render-utils.js";
+import type { UntrustedTextSanitizer } from "./ansi-utils.js";
 import { renderEditDiffResult, renderWriteDiffResult } from "./diff-renderer.js";
 import {
   buildPendingEditPreviewData,
@@ -198,6 +200,7 @@ function buildPreviewText(
   maxLines: number,
   theme: RenderTheme,
   expanded: boolean,
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): string {
   if (lines.length === 0) {
     return theme.fg("muted", "↳ (no output)");
@@ -208,7 +211,7 @@ function buildPreviewText(
   const effectiveLines = expanded ? lines : capPreviewLineLengths(lines);
   const { shown, remaining } = previewLines(effectiveLines, maxLines);
   let text = shown
-    .map((line) => theme.fg("toolOutput", sanitizeAnsiForThemedOutput(line)))
+    .map((line) => theme.fg("toolOutput", sanitize(line)))
     .join("\n");
   text += formatTruncationHint(remaining, expanded, theme);
   return text;
@@ -521,12 +524,15 @@ function getRtkCompactionInfo(details: unknown): RtkCompactionInfo | undefined {
   return info;
 }
 
-function formatRtkTechniqueList(techniques: string[]): string {
+function formatRtkTechniqueList(
+  techniques: string[],
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
+): string {
   if (techniques.length === 0) {
     return "";
   }
 
-  const visible = techniques.slice(0, 3).join(", ");
+  const visible = techniques.slice(0, 3).map(sanitize).join(", ");
   const hidden = techniques.length - 3;
   return hidden > 0 ? `${visible}, +${hidden} more` : visible;
 }
@@ -589,7 +595,7 @@ function formatRtkSummarySuffix(params: RtkHintParams): string {
   return withRtkCompactionInfo(params, (info) => {
     const segments: string[] = [RTK_COMPACTION_LABEL];
 
-    const techniqueText = formatRtkTechniqueList(info.techniques);
+    const techniqueText = formatRtkTechniqueList(info.techniques, resolveUntrustedTextSanitizer(params.config));
     if (techniqueText) {
       segments.push(techniqueText);
     }
@@ -633,7 +639,7 @@ function formatRtkPreviewHint(params: RtkHintParams): string {
   const { theme } = params;
   return withRtkCompactionInfo(params, (info) => {
     const hints: string[] = [];
-    const techniqueText = formatRtkTechniqueList(info.techniques);
+    const techniqueText = formatRtkTechniqueList(info.techniques, resolveUntrustedTextSanitizer(params.config));
     if (techniqueText) {
       hints.push(`${RTK_COMPACTION_LABEL}: ${techniqueText}`);
     } else {
@@ -674,7 +680,7 @@ function appendMcpPreviewHints(preview: string, ctx: McpPreviewHintContext): str
       hints.push("truncated by backend limits");
     }
     if (truncation.fullOutputPath) {
-      hints.push(`full output: ${truncation.fullOutputPath}`);
+      hints.push(`full output: ${resolveUntrustedTextSanitizer(config)(truncation.fullOutputPath)}`);
     }
     preview += `\n${theme.fg("warning", `(${hints.join(" • ")})`)}`;
   }
@@ -701,7 +707,7 @@ function renderPreviewText(
   const maxLines = useExpanded
     ? getExpandedPreviewLineLimit(lines, config)
     : config.previewLines;
-  const preview = buildPreviewText(lines, maxLines, theme, useExpanded);
+  const preview = buildPreviewText(lines, maxLines, theme, useExpanded, resolveUntrustedTextSanitizer(config));
   return textResult(appendHints(preview));
 }
 
@@ -759,6 +765,7 @@ function formatBashSummary(
 function formatBashTruncationHints(
   details: BashToolDetails | undefined,
   theme: RenderTheme,
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): string {
   if (!details) {
     return "";
@@ -769,7 +776,7 @@ function formatBashTruncationHints(
     hints.push("output truncated");
   }
   if (details.fullOutputPath) {
-    hints.push(`full output: ${details.fullOutputPath}`);
+    hints.push(`full output: ${sanitize(details.fullOutputPath)}`);
   }
   if (hints.length === 0) {
     return "";
@@ -812,7 +819,7 @@ function renderBashPreviewWithHints(
   options: ToolRenderResultOptions,
   details: BashToolDetails | undefined,
 ): Text {
-  let preview = buildPreviewText(lines, maxLines, theme, options.expanded);
+  let preview = buildPreviewText(lines, maxLines, theme, options.expanded, resolveUntrustedTextSanitizer(config));
   if (config.showTruncationHints) {
     preview += formatBashTruncationHints(details, theme);
   }
@@ -867,7 +874,7 @@ function renderBashErrorResult(
     if (options.expanded || maxLines > 0) {
       const { shown, remaining } = previewLines(lines, maxLines);
       text += `\n${shown
-        .map((line) => theme.fg("error", sanitizeAnsiForThemedOutput(line)))
+        .map((line) => theme.fg("error", resolveUntrustedTextSanitizer(config)(line)))
         .join("\n")}`;
       text += formatTruncationHint(remaining, options.expanded, theme);
     }
@@ -899,7 +906,7 @@ function renderSearchResult(
   const lines = prepareOutputLines(extractTextOutput(result), options);
 
   if (config.searchOutputMode === "hidden") {
-    return textResult("");
+    return textResult(theme.fg("muted", "↳ output hidden"));
   }
 
   const hintCtx: PreviewHintContext = { lines, config, theme, options, details };
@@ -961,6 +968,7 @@ function formatMcpCallLine(
   toolLabel: string,
   args: Record<string, unknown>,
   theme: RenderTheme,
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): Text {
   const argCount = Object.keys(args).length;
   const argSuffix = formatArgCountSuffix(argCount, theme);
@@ -972,7 +980,7 @@ function formatMcpCallLine(
         : toolLabel;
 
   return new Text(
-    `${theme.fg("toolTitle", theme.bold("MCP"))} ${theme.fg("accent", target)}${argSuffix}`,
+    `${theme.fg("toolTitle", theme.bold("MCP"))} ${theme.fg("accent", sanitize(target))}${argSuffix}`,
     0,
     0,
   );
@@ -1003,6 +1011,7 @@ function renderMcpResult(
   options: ToolRenderResultOptions,
   config: ToolDisplayConfig,
   theme: RenderTheme,
+  hiddenLabel = "output hidden (classified as MCP)",
 ): Text {
   const partial = handlePartialResult(options, theme, "running...");
   if (partial) {
@@ -1010,7 +1019,7 @@ function renderMcpResult(
   }
 
   if (config.mcpOutputMode === "hidden") {
-    return textResult("");
+    return textResult(theme.fg("muted", `↳ ${hiddenLabel}`));
   }
 
   const lines = prepareOutputLines(extractTextOutput(result), options);
@@ -1078,9 +1087,10 @@ function formatSearchCallLine(
   accent: string,
   mutedSuffix: string,
   theme: RenderTheme,
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): Text {
   return new Text(
-    `${theme.fg("toolTitle", theme.bold(toolName))} ${theme.fg("accent", accent)}${theme.fg("muted", mutedSuffix)}`,
+    `${theme.fg("toolTitle", theme.bold(toolName))} ${theme.fg("accent", sanitize(accent))}${theme.fg("muted", sanitize(mutedSuffix))}`,
     0,
     0,
   );
@@ -1098,6 +1108,7 @@ function renderCustomToolResult(
     options,
     { ...config, mcpOutputMode: outputMode },
     theme,
+    "output hidden",
   );
 }
 
@@ -1131,8 +1142,9 @@ function renderReadDisplayCall(
   args: unknown,
   theme: RenderTheme,
   adapter: ToolDisplayAdapter = {},
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
  ): Text {
-  const path = shortenPath(getAdapterPath(args, adapter));
+  const path = sanitize(shortenPath(getAdapterPath(args, adapter)));
   const offset = getNumericField(args, "offset");
   const limit = getNumericField(args, "limit");
   let suffix = "";
@@ -1156,7 +1168,7 @@ function renderReadDisplayResult(
   }
 
   if (config.readOutputMode === "hidden") {
-    return textResult("");
+    return textResult(theme.fg("muted", "↳ output hidden"));
   }
 
   const details = result.details as ReadToolDetails | undefined;
@@ -1193,7 +1205,8 @@ function renderEditDisplayCall(
   adapter: ToolDisplayAdapter = {},
   getConfig: ConfigGetter,
  ): Text | Container {
-  const path = shortenPath(getAdapterPath(args, adapter));
+  const sanitize = resolveUntrustedTextSanitizer(getConfig());
+  const path = sanitize(shortenPath(getAdapterPath(args, adapter)));
   const lineCount = adapter.getEditLineCount?.(args) ?? getEditLineCount(args);
   const summaryText = `${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path || "...")}${formatLineCountSuffix(lineCount, theme)}`;
   if (!context?.argsComplete || !context.isPartial) {
@@ -1226,7 +1239,7 @@ function renderEditDisplayResult(
   getConfig: ConfigGetter,
  ): unknown {
   const lineCount = adapter.getEditLineCount?.(context?.args) ?? getEditLineCount(context?.args);
-  const { fallbackText, earlyResult } = handleEditOrWriteResult(result, options, context, theme, lineCount, "editing", "Edit failed.");
+  const { fallbackText, earlyResult } = handleEditOrWriteResult(result, options, context, theme, lineCount, "editing", "Edit failed.", resolveUntrustedTextSanitizer(getConfig()));
   if (earlyResult) {
     return earlyResult;
   }
@@ -1250,13 +1263,15 @@ function handleEditOrWriteResult(
   lineCount: number,
   progressLabel: string,
   errorMessage: string,
+  sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
 ): { fallbackText: string; earlyResult: Text | undefined } {
   if (options.isPartial) {
     return { fallbackText: "", earlyResult: new Text(formatInProgressLineCount(progressLabel, lineCount, theme), 0, 0) };
   }
   const fallbackText = extractTextOutput(result);
   if (isToolError(result, context)) {
-    return { fallbackText, earlyResult: textResult(theme.fg("error", fallbackText || errorMessage)) };
+    const sanitizedFallback = sanitize(fallbackText);
+    return { fallbackText: sanitizedFallback, earlyResult: textResult(theme.fg("error", sanitizedFallback || errorMessage)) };
   }
   return { fallbackText, earlyResult: undefined };
 }
@@ -1410,7 +1425,7 @@ function resolveToolRenderers(
     return {
       renderCall(args, theme) {
         if (override.kind === "mcp") {
-          return formatMcpCallLine("mcp", "MCP Proxy", toRecord(args), theme);
+          return formatMcpCallLine("mcp", "MCP Proxy", toRecord(args), theme, resolveUntrustedTextSanitizer(getConfig()));
         }
         return formatGenericToolCallLine(toolName, args, theme);
       },
@@ -1448,7 +1463,7 @@ function resolveToolRenderers(
   if (mcpCandidate.isMcp) {
     return {
       renderCall(args, theme) {
-        return formatMcpCallLine(toolName, mcpCandidate.label, toRecord(args), theme);
+        return formatMcpCallLine(toolName, mcpCandidate.label, toRecord(args), theme, resolveUntrustedTextSanitizer(getConfig()));
       },
       renderResult(result, options, theme) {
         return renderMcpResult(result as ToolRenderInput, options, getConfig(), theme);
@@ -1510,12 +1525,12 @@ function adapterRenderers(
   if (adapter.renderCall) {
     renderers.renderCall = adapter.renderCall;
   } else if (kind === "read") {
-    renderers.renderCall = (args, theme) => renderReadDisplayCall(args, theme, adapter);
+    renderers.renderCall = (args, theme) => renderReadDisplayCall(args, theme, adapter, resolveUntrustedTextSanitizer(getConfig()));
   } else if (kind === "edit") {
     renderers.renderCall = (args, theme, context) => renderEditDisplayCall(args, theme, context, adapter, getConfig);
   } else if (kind === "mcp") {
     const toolLabel = getTextField({ name: toolName }, "label") ?? (toolName === "mcp" ? "MCP Proxy" : `MCP ${toolName}`);
-    renderers.renderCall = (args, theme) => formatMcpCallLine(toolName, toolLabel, toRecord(args), theme);
+    renderers.renderCall = (args, theme) => formatMcpCallLine(toolName, toolLabel, toRecord(args), theme, resolveUntrustedTextSanitizer(getConfig()));
   }
 
   if (adapter.renderResult) {
@@ -1558,7 +1573,7 @@ function searchRenderers(toolName: "grep" | "find" | "ls", getConfig: ConfigGett
         const scope = getSearchScope(args);
         const globSuffix = args.glob ? ` (${args.glob})` : "";
         const limitSuffix = args.limit !== undefined ? ` limit ${args.limit}` : "";
-        return formatSearchCallLine("grep", `/${args.pattern}/`, ` in ${scope}${globSuffix}${limitSuffix}`, theme);
+        return formatSearchCallLine("grep", `/${args.pattern}/`, ` in ${scope}${globSuffix}${limitSuffix}`, theme, resolveUntrustedTextSanitizer(getConfig()));
       },
       renderResult(result, options, theme) {
         return renderSearchToolResultWithConfig(result, options, theme, getConfig, "match", "matches");
@@ -1570,7 +1585,7 @@ function searchRenderers(toolName: "grep" | "find" | "ls", getConfig: ConfigGett
     return {
       renderCall(args, theme) {
         const { scope, limitSuffix } = buildSearchCallSuffix(args);
-        return formatSearchCallLine("find", args.pattern as string, ` in ${scope}${limitSuffix}`, theme);
+        return formatSearchCallLine("find", args.pattern as string, ` in ${scope}${limitSuffix}`, theme, resolveUntrustedTextSanitizer(getConfig()));
       },
       renderResult(result, options, theme) {
         return renderSearchToolResultWithConfig(result, options, theme, getConfig, "result");
@@ -1581,7 +1596,7 @@ function searchRenderers(toolName: "grep" | "find" | "ls", getConfig: ConfigGett
   return {
     renderCall(args, theme) {
       const { scope, limitSuffix } = buildSearchCallSuffix(args);
-      return formatSearchCallLine("ls", scope, limitSuffix, theme);
+      return formatSearchCallLine("ls", scope, limitSuffix, theme, resolveUntrustedTextSanitizer(getConfig()));
     },
     renderResult(result, options, theme) {
       return renderSearchToolResultWithConfig(result, options, theme, getConfig, "entry", "entries");
@@ -1621,7 +1636,7 @@ function writeRenderers(getConfig: ConfigGetter, writeMeta: Map<string, WriteExe
     renderResult(result, options, theme, context) {
       const content = getToolContentArg(context?.args);
       const lineCount = countWriteContentLines(content);
-      const { fallbackText, earlyResult } = handleEditOrWriteResult(result, options, context, theme, lineCount, "writing", "Write failed.");
+      const { fallbackText, earlyResult } = handleEditOrWriteResult(result, options, context, theme, lineCount, "writing", "Write failed.", resolveUntrustedTextSanitizer(getConfig()));
       if (earlyResult) {
         return earlyResult;
       }
@@ -1725,7 +1740,7 @@ function builtInRenderers(
   if (toolName === "read") {
     return {
       renderCall(args, theme) {
-        return renderReadDisplayCall(args, theme);
+        return renderReadDisplayCall(args, theme, {}, resolveUntrustedTextSanitizer(getConfig()));
       },
       renderResult(result, options, theme) {
         return renderReadDisplayResult(result, options, getConfig(), theme);
@@ -1759,7 +1774,7 @@ function builtInRenderers(
       return renderBashCall(args, theme, context as never, config.bashCommandMaxChars, {
         intentMode: config.bashIntentMode,
         showCommand: config.bashIntentShowCommand,
-      });
+      }, resolveUntrustedTextSanitizer(config));
     },
     renderResult(result, options, theme, context) {
       return renderBashDisplayResult(result, options, theme, context, getConfig);

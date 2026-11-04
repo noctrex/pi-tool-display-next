@@ -1,7 +1,26 @@
 const ANSI_SGR_PATTERN = /\x1b\[([0-9;]*)m/g;
 const STYLE_RESET_PARAMS = [39, 22, 23, 24, 25, 27, 28, 29, 59] as const;
 
+import { stripAnsi } from "./vendored/ansi.js";
+
 export { ANSI_SGR_PATTERN, STYLE_RESET_PARAMS };
+
+/** Sanitizer applied to untrusted text before it is embedded in rendered output. */
+export type UntrustedTextSanitizer = (text: string) => string;
+
+// C0 controls except \n and \t, DEL, and C1 controls. Newlines survive because
+// renderers split lines themselves; tabs are expanded by splitLines where it runs.
+const CONTROL_CHARACTER_MOP_UP_PATTERN = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+
+/**
+ * Full content-hygiene boundary: removes every escape sequence (CSI, OSC,
+ * DCS, SOS, PM, APC, including 8-bit introducers and every ST form) plus all
+ * remaining C0/C1 control bytes. Unlike sanitizeAnsiForThemedOutput this also
+ * removes foreground SGR colors carried by untrusted content.
+ */
+export function sanitizeUntrustedText(text: string): string {
+	return stripAnsi(text).replace(CONTROL_CHARACTER_MOP_UP_PATTERN, " ");
+}
 
 export function expandSgrReset(param: number): readonly number[] | undefined {
   return param === 0 ? STYLE_RESET_PARAMS : undefined;

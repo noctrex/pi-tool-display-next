@@ -226,11 +226,20 @@ export function normalizeCustomToolOverrideEntry(rawEntry: unknown): CustomToolO
 
 function normalizeCustomToolOverrides(rawOverrides: unknown): Record<string, CustomToolOverrideConfig> {
 	const source = toRecord(rawOverrides);
+	// Prototype-shaping keys are skipped before any assignment: JSON.parse can
+	// surface a `__proto__` key as an own property, and assigning it on a plain
+	// record would rebind the prototype instead of storing an entry.
 	const overrides: Record<string, CustomToolOverrideConfig> = {};
 
 	for (const [rawToolName, rawEntry] of Object.entries(source)) {
 		const toolName = rawToolName.trim();
-		if (!toolName || isBuiltInToolOverrideName(toolName)) {
+		if (
+			!toolName ||
+			isBuiltInToolOverrideName(toolName) ||
+			toolName === "__proto__" ||
+			toolName === "constructor" ||
+			toolName === "prototype"
+		) {
 			continue;
 		}
 
@@ -289,6 +298,11 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 			source.allowExternalDiffPreviews,
 			DEFAULT_TOOL_DISPLAY_CONFIG.allowExternalDiffPreviews,
 		),
+		strictAnsiSanitization: toBoolean(
+			source.strictAnsiSanitization,
+			DEFAULT_TOOL_DISPLAY_CONFIG.strictAnsiSanitization,
+		),
+		debug: toBoolean(source.debug, DEFAULT_TOOL_DISPLAY_CONFIG.debug),
 		showTruncationHints: toBoolean(source.showTruncationHints, DEFAULT_TOOL_DISPLAY_CONFIG.showTruncationHints),
 		showRtkCompactionHints: toBoolean(
 			source.showRtkCompactionHints,

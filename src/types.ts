@@ -71,6 +71,8 @@ export interface ToolDisplayConfig {
 	diffCollapsedLines: number;
 	diffWordWrap: boolean;
 	allowExternalDiffPreviews: boolean;
+	strictAnsiSanitization: boolean;
+	debug: boolean;
 	showTruncationHints: boolean;
 	showRtkCompactionHints: boolean;
 }
@@ -106,6 +108,8 @@ export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
 	diffCollapsedLines: 24,
 	diffWordWrap: true,
 	allowExternalDiffPreviews: false,
+	strictAnsiSanitization: false,
+	debug: false,
 	showTruncationHints: false,
 	showRtkCompactionHints: false,
 };

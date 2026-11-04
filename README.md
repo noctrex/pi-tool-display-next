@@ -84,9 +84,10 @@ Stored at `<agent-dir>/pi-tool-display-next.json` (respects `PI_CODING_AGENT_DIR
 | `diffCollapsedLines` | `24` | Diff lines shown before collapsing |
 | `diffWordWrap` | `true` | Wrap long diff lines |
 | `allowExternalDiffPreviews` | `false` | Pending previews for paths outside the workspace |
+| `strictAnsiSanitization` | `false` | Strip every escape sequence and control byte from untrusted tool content (`true` loses colors that external programs add; matches stock Pi hygiene) |
 | `showTruncationHints` | `false` | Truncation indicators on compacted output |
 | `showRtkCompactionHints` | `false` | RTK hints when RTK is detected |
-| `debug` | `false` | Append diagnostics to `debug/debug.log` in the install directory |
+| `debug` | `false` | Append diagnostics to `debug/debug.log` in the install directory (1 MB cap, secret-shaped tokens redacted) |
 
 Opt in a noisy tool from another extension:
 

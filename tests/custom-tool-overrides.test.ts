@@ -196,7 +196,8 @@ test("custom generic tool override honors per-tool hidden output mode", () => {
 	registerToolDisplayOverrides(stub.api, () => config);
 
 	const quiet = claimRenderers(stub, "large_payload_tool");
-	assert.equal(renderToolResult(quiet as ResolvedRenderersLike, "secret\nnoisy\noutput\n"), "");
+	// Hidden is visible, never silent: the marker names which renderer hid it.
+	assert.equal(renderToolResult(quiet as ResolvedRenderersLike, "secret\nnoisy\noutput\n"), "↳ output hidden");
 });
 
 test("custom tool overrides register nothing for missing tools", () => {

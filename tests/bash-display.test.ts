@@ -493,3 +493,55 @@ test("renderBashCall truncation keeps short multiline command intact", () => {
 	const output = renderedText(text);
 	assert.ok(output.includes("echo one ; echo two"), "short multiline command should still collapse to one line");
 });
+
+// ─── Untrusted command content: sanitizer gate ───────────────────────────
+
+import { sanitizeUntrustedText } from "../src/ansi-utils.ts";
+
+const ESC = "\x1b";
+
+function renderedHeaderText(command: string, strict: boolean): string {
+	return renderedSingleLine(
+		renderBashCall(
+			{ command },
+			createPassThroughTheme(),
+			makeContext(),
+			0,
+			undefined,
+			strict ? sanitizeUntrustedText : undefined,
+		),
+	);
+}
+
+test("bash header keeps foreground SGR from the command in default mode", () => {
+	const output = renderedHeaderText(`printf "${ESC}[31mred${ESC}[0m"`, false);
+	assert.ok(output.includes(`${ESC}[31m`), "foreground color preserved by default");
+});
+
+test("bash header strips escape payloads in strict mode", () => {
+	const output = renderedHeaderText(
+		`printf "${ESC}]52;c;Zm9v\x07${ESC}[?25l${ESC}[31mred"`,
+		true,
+	);
+	assert.equal(output.includes(ESC), false, `ESC survived strict mode: ${JSON.stringify(output)}`);
+	assert.ok(output.includes("printf"), "command text itself survives");
+});
+
+test("bash header strips bare carriage returns in strict mode", () => {
+	const output = renderedHeaderText("echo safe\rprintf evil", true);
+	assert.equal(output.includes("\r"), false, "bare CR is replaced, header spoofing blocked");
+});
+
+test("bash header shellPath is sanitized in strict mode", () => {
+	const text = renderBashCall(
+		{ command: "ls", shellPath: `pwsh${ESC}]0;spoofed\x07` },
+		createPassThroughTheme(),
+		makeContext(),
+		0,
+		undefined,
+		sanitizeUntrustedText,
+	);
+	const output = renderedSingleLine(text);
+	assert.equal(output.includes(ESC), false, `ESC survived shellPath: ${JSON.stringify(output)}`);
+	assert.ok(output.includes("pwsh"), "shell name survives");
+});

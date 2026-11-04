@@ -3,7 +3,6 @@ export interface PromptMetadata {
 	promptGuidelines?: string[];
 }
 
-const MCP_DESCRIPTION_PATTERN = /\bmcp\b/i;
 const MCP_ADAPTER_SOURCE_PATTERN = /(?:^|[/\\@_-])(?:pi-)?mcp(?:[/\\@_-]|$)|pi-mcp-adapter|mcp-adapter/i;
 const MAX_PROMPT_SNIPPET_LENGTH = 120;
 
@@ -94,6 +93,15 @@ function hasMcpSourceInfo(value: unknown): boolean {
 	return false;
 }
 
+/**
+ * Structural MCP detection only. A tool is treated as MCP when its name uses
+ * Pi's `mcp__server__tool` convention, when its sourceInfo names an MCP
+ * adapter, or when its parameters expose MCP server fields. Loose shapes
+ * (a description or label merely mentioning MCP, colons in the name, or
+ * generic prefixes such as `ctx_`) must not claim a tool: claimed tools have
+ * their output hidden by default, and hiding must never be silent for
+ * third-party tools.
+ */
 export function isMcpToolCandidate(tool: unknown): boolean {
 	if (!tool || typeof tool !== "object") {
 		return false;
@@ -101,25 +109,14 @@ export function isMcpToolCandidate(tool: unknown): boolean {
 
 	const record = tool as Record<string, unknown>;
 	const name = typeof record.name === "string" ? record.name : "";
-	const description = typeof record.description === "string" ? record.description : "";
-	const label = typeof record.label === "string" ? record.label : "";
 
 	if (name === "mcp") {
-		return true;
-	}
-	if (MCP_DESCRIPTION_PATTERN.test(description) || MCP_DESCRIPTION_PATTERN.test(label)) {
 		return true;
 	}
 	if (hasMcpSourceInfo(record.sourceInfo)) {
 		return true;
 	}
-	if (/^mcp[_-]/i.test(name) || /_mcp$/i.test(name)) {
-		return true;
-	}
-	if (name.includes(":")) {
-		return true;
-	}
-	if (/^ctx_/i.test(name)) {
+	if (/^mcp__/i.test(name)) {
 		return true;
 	}
 

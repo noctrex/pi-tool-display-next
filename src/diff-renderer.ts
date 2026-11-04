@@ -12,7 +12,8 @@ import {
 	resolveDiffPresentationMode,
 	type DiffPresentationMode,
 } from "./diff-presentation.js";
-import { pluralize, sanitizeAnsiForThemedOutput } from "./render-utils.js";
+import { pluralize, resolveUntrustedTextSanitizer, sanitizeAnsiForThemedOutput } from "./render-utils.js";
+import type { UntrustedTextSanitizer } from "./ansi-utils.js";
 import { splitWriteContentLines } from "./write-display-utils.js";
 import { DEFAULT_TOOL_DISPLAY_CONFIG, type DiffIndicatorMode, type ToolDisplayConfig } from "./types.js";
 
@@ -255,9 +256,12 @@ function resolveLanguageFromPath(rawPath: string | undefined): string | undefine
 	}
 }
 
-function createCodeLineHighlighter(language: string | undefined): CodeLineHighlighter {
+function createCodeLineHighlighter(
+	language: string | undefined,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
+): CodeLineHighlighter {
 	if (!language) {
-		return (line) => sanitizeAnsiForThemedOutput(line);
+		return (line) => sanitize(line);
 	}
 
 	const cache = new Map<string, string>();
@@ -269,13 +273,16 @@ function createCodeLineHighlighter(language: string | undefined): CodeLineHighli
 		if (cached !== undefined) {
 			return cached;
 		}
+		// Content hygiene first, then extension-generated highlighting on the
+		// clean text, then the background-strip policy for the styling itself.
 		try {
-			const highlighted = highlightCode(line, language)[0] ?? line;
+			const cleaned = sanitize(line);
+			const highlighted = highlightCode(cleaned, language)[0] ?? cleaned;
 			const sanitized = sanitizeAnsiForThemedOutput(highlighted);
 			cache.set(line, sanitized);
 			return sanitized;
 		} catch {
-			const sanitizedFallback = sanitizeAnsiForThemedOutput(line);
+			const sanitizedFallback = sanitize(line);
 			cache.set(line, sanitizedFallback);
 			return sanitizedFallback;
 		}
@@ -678,8 +685,14 @@ function formatLineNumberLabel(
 	return formatLineNumber(value, fallback, width);
 }
 
-function formatMetaEntryRows(entry: DiffMetaEntry, width: number, theme: DiffTheme, wordWrap: boolean): RenderedRow[] {
-	const normalized = sanitizeAnsiForThemedOutput(normalizeCodeWhitespace(entry.raw));
+function formatMetaEntryRows(
+	entry: DiffMetaEntry,
+	width: number,
+	theme: DiffTheme,
+	wordWrap: boolean,
+	sanitize: UntrustedTextSanitizer = sanitizeAnsiForThemedOutput,
+): RenderedRow[] {
+	const normalized = sanitize(normalizeCodeWhitespace(entry.raw));
 	const lines = wordWrap
 		? wrapToWidth(normalized, width, true)
 		: [truncateToWidth(normalized, width)];
@@ -1603,6 +1616,7 @@ interface DiffRenderContext {
 	wordWrap: boolean;
 	indicatorMode: DiffIndicatorMode;
 	showHashlineAnchors: boolean;
+	sanitize: UntrustedTextSanitizer;
 }
 
 function processDiffEntries(
@@ -1614,7 +1628,7 @@ function processDiffEntries(
 	const rows: RenderedRow[] = [];
 	for (const entry of entries) {
 		if (entry.kind !== "line") {
-			rows.push(...formatMetaEntryRows(entry, width, theme, wordWrap));
+			rows.push(...formatMetaEntryRows(entry, width, theme, wordWrap, ctx.sanitize));
 			continue;
 		}
 		pushDiffLineRows(rows, processLine(entry), entry);
@@ -2071,19 +2085,20 @@ export function renderEditDiffResult(
 	theme: DiffTheme,
 	fallbackText: string,
 ): Component {
+	const sanitize = resolveUntrustedTextSanitizer(config);
 	const diffText = safeGetDiff(details);
 	if (!diffText.trim()) {
 		if (!fallbackText.trim()) {
 			return new Text(theme.fg("muted", "↳ edit completed (no diff payload)"), 0, 0);
 		}
-		return new Text(theme.fg("toolOutput", fallbackText), 0, 0);
+		return new Text(theme.fg("toolOutput", sanitize(fallbackText)), 0, 0);
 	}
 
 	let parsed: ParsedDiff;
 	try {
 		parsed = parseDiff(diffText);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = sanitize(error instanceof Error ? error.message : String(error));
 		return new Text(theme.fg("warning", `↳ unable to render diff: ${message}`), 0, 0);
 	}
 
@@ -2098,7 +2113,7 @@ export function renderEditDiffResult(
 	const palette = resolveDiffPalette(theme);
 	const containerBgAnsi = resolveContainerBackgroundAnsi(theme);
 	const language = resolveLanguageFromPath(options.filePath);
-	const highlightLine = createCodeLineHighlighter(language);
+	const highlightLine = createCodeLineHighlighter(language, sanitize);
 	const wordWrap = config.diffWordWrap;
 	const indicatorMode = resolveDiffIndicatorMode(config);
 
@@ -2122,17 +2137,17 @@ export function renderEditDiffResult(
 			const bodyRows = mode === "split"
 				? renderSplit(
 					splitRows,
-					{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors },
+					{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors, sanitize },
 					lineNumberWidth,
 				)
 				: mode === "compact"
 					? renderCompact(
 						parsed.entries,
-						{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors },
+						{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors, sanitize },
 					)
 					: renderUnified(
 						parsed.entries,
-						{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors },
+						{ width: safeWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors, sanitize },
 						lineNumberWidth,
 					);
 			const bodyWithLimit = applyLineLimit(
@@ -2397,11 +2412,12 @@ export function renderWriteDiffResult(
 	theme: DiffTheme,
 	fallbackText: string,
 ): Component {
+	const sanitize = resolveUntrustedTextSanitizer(config);
 	if (typeof content !== "string") {
 		if (!fallbackText.trim()) {
 			return new Text(theme.fg("muted", "↳ write completed"), 0, 0);
 		}
-		return new Text(theme.fg("toolOutput", fallbackText), 0, 0);
+		return new Text(theme.fg("toolOutput", sanitize(fallbackText)), 0, 0);
 	}
 
 	const filePath = options.filePath?.trim() || "(unknown path)";
@@ -2421,7 +2437,7 @@ export function renderWriteDiffResult(
 	const palette = resolveDiffPalette(theme);
 	const containerBgAnsi = resolveContainerBackgroundAnsi(theme);
 	const language = resolveLanguageFromPath(filePath);
-	const highlightLine = createCodeLineHighlighter(language);
+	const highlightLine = createCodeLineHighlighter(language, sanitize);
 	const wordWrap = config.diffWordWrap;
 	const indicatorMode = resolveDiffIndicatorMode(config);
 
@@ -2475,7 +2491,7 @@ export function renderWriteDiffResult(
 
 			const data = getDetailedData();
 			const renderCtx: DiffRenderContext = {
-				width: safeWidth, theme, inlineHighlights: data.inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors: false,
+				width: safeWidth, theme, inlineHighlights: data.inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors: false, sanitize,
 			};
 			const bodyRows: RenderedRow[] = data.entries.length === 0
 				? [{ text: theme.fg("muted", "(empty file)"), hunkIndex: null }]
